@@ -346,7 +346,7 @@ export default function SendPage() {
               {loading ? "Processing..." : "Shield Tokens"}
             </button>
           </>
-        ) : (
+        ) : txType === "transfer" ? (
           <>
             <h2 className="text-white font-semibold mb-1">Private Transfer</h2>
             <p className="text-gray-400 text-sm mb-4">
@@ -388,7 +388,7 @@ export default function SendPage() {
               {loading ? "Processing..." : "Send Private TX"}
             </button>
           </>
-        ) : txType === "unshield" ? (
+        ) : (
           <>
             <h2 className="text-white font-semibold mb-1">Unshield Tokens</h2>
             <p className="text-gray-400 text-sm mb-4">
@@ -416,7 +416,7 @@ export default function SendPage() {
               {loading ? "Processing..." : "Unshield Tokens"}
             </button>
           </>
-        ) : null}
+        )}
 
         {status && <StatusMsg type={status.type} msg={status.msg} />}
 
