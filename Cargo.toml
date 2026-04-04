@@ -7,7 +7,8 @@ members = [
   "crates/stf",
   "crates/stf/stf-declaration",
   "crates/utils/node-discovery",
-  "examples/value-setter", 
+  "crates/privacy",
+  "examples/value-setter",
   "scripts/acceptance-test",
   "scripts/soak-test",
 ]
