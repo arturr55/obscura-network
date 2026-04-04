@@ -24,7 +24,7 @@ function bigintToBytes(n: bigint): Uint8Array {
 async function sha256(data: Uint8Array): Promise<Uint8Array> {
   if (typeof globalThis.crypto !== "undefined") {
     return new Uint8Array(
-      await globalThis.crypto.subtle.digest("SHA-256", data)
+      await globalThis.crypto.subtle.digest("SHA-256", data as unknown as ArrayBuffer)
     );
   }
   const { createHash } = await import("crypto");

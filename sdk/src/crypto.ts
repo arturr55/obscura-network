@@ -5,7 +5,7 @@ import { Note, NoteSecret, ShieldedNote } from "./types";
 
 async function sha256(data: Uint8Array): Promise<Uint8Array> {
   if (typeof globalThis.crypto !== "undefined") {
-    const buf = await globalThis.crypto.subtle.digest("SHA-256", data);
+    const buf = await globalThis.crypto.subtle.digest("SHA-256", data as unknown as ArrayBuffer);
     return new Uint8Array(buf);
   }
   // Node.js fallback

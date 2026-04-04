@@ -49,7 +49,14 @@ export interface ComplianceReport {
   proof: string; // hex
 }
 
+// Signer interface — works with MetaMask (browser) or private key (Node.js)
+export interface ObscuraSigner {
+  getAddress(): Promise<string>;
+  signTransaction(tx: unknown, schema: unknown): Promise<string>;
+}
+
 export interface OscuraClientConfig {
   nodeUrl: string; // e.g. "http://127.0.0.1:12346"
   chainId?: number;
+  signer?: ObscuraSigner;
 }

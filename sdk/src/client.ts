@@ -2,6 +2,7 @@
 
 import {
   OscuraClientConfig,
+  ObscuraSigner,
   ShieldParams,
   TransferParams,
   UnshieldParams,
@@ -21,9 +22,21 @@ const DEFAULT_NODE = "http://127.0.0.1:12346";
 
 export class ObscuraClient {
   private nodeUrl: string;
+  private signer?: ObscuraSigner;
 
   constructor(config: OscuraClientConfig) {
     this.nodeUrl = config.nodeUrl ?? DEFAULT_NODE;
+    this.signer = config.signer;
+  }
+
+  /** Attach a signer after construction (e.g. after MetaMask connects) */
+  connect(signer: ObscuraSigner): ObscuraClient {
+    this.signer = signer;
+    return this;
+  }
+
+  async getAddress(): Promise<string | null> {
+    return this.signer ? this.signer.getAddress() : null;
   }
 
   /**
@@ -161,12 +174,48 @@ export class ObscuraClient {
     return Object.keys(data.modules ?? {});
   }
 
-  private async _submitTx(module: string, callMsg: unknown): Promise<void> {
-    // Phase 1: log the transaction (full submission in Phase 2 with wallet signing)
-    console.log(
-      `[ObscuraClient] tx → ${module}:`,
-      JSON.stringify(callMsg, null, 2).slice(0, 200)
-    );
-    // TODO Phase 2: sign with wallet and submit via RPC
+  private async _submitTx(module: string, callMsg: unknown): Promise<string> {
+    if (!this.signer) {
+      throw new Error(
+        "No signer attached. Call client.connect(signer) first.\n" +
+        "Browser:  client.connect(await MetaMaskSigner.connect())\n" +
+        "Node.js:  client.connect(new PrivateKeySigner('0x...', nodeUrl))"
+      );
+    }
+
+    // 1. Fetch the rollup's serializer schema (used for EIP-712 type encoding)
+    const schemaRes = await fetch(`${this.nodeUrl}/sequencer/schema`).catch(() => null);
+    const schema = schemaRes?.ok ? await schemaRes.json() : null;
+
+    // 2. Build the RuntimeCall
+    const runtimeCall = { [module]: callMsg };
+
+    // 3. Sign with EIP-712
+    const signature = await this.signer.signTransaction(runtimeCall, schema);
+    const signerAddress = await this.signer.getAddress();
+
+    // 4. Submit to sequencer
+    const body = {
+      body: {
+        call_message: runtimeCall,
+        signature,
+        pub_key: signerAddress,
+      },
+    };
+
+    const res = await fetch(`${this.nodeUrl}/sequencer/eip712_tx`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Transaction failed (${res.status}): ${err}`);
+    }
+
+    const result = await res.json() as { id?: string; status?: string };
+    console.log(`✅ TX submitted: ${result.id ?? "ok"} (status: ${result.status ?? "pending"})`);
+    return result.id ?? "";
   }
 }
