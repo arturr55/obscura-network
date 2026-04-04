@@ -1,12 +1,12 @@
 [da]
-# The address of the Celestia RPC server to interact with.
-rpc_url = "ws://127.0.0.1:26658"
-grpc_url = "http://127.0.0.1:9091"
-grpc_auth_token = "MY.SECRET.TOKEN"
+# Celestia Mocha-4 testnet via QuickNode
+rpc_url = "wss://YOUR_ENDPOINT.celestia-mocha.quiknode.pro/YOUR_TOKEN
+grpc_url = "https://YOUR_ENDPOINT.celestia-mocha.quiknode.pro:9090"
+grpc_auth_token = "YOUR_TOKEN"
 
 # The private key in hex format of Celestia wallet that has enough TIA to publish blobs.
-# Matches celestia1a68m2l85zn5xh0l07clk4rfvnezhywc53g8x7s
-signer_private_key = "aec34bb1cfae6e906594dc106af4057a9046f769e2eeed67d040f0107e15e167"
+# Matches celestia1pwwwfcdrkdazl5dceadc9vdf6v6ap6qn30sv3m
+signer_private_key = "YOUR_PRIVATE_KEY_HEX"
 
 
 [storage]
@@ -26,9 +26,9 @@ user_hashtable_buckets = 1_000_000
 user_preallocate_ht = false
 
 [runner]
-da_polling_interval_ms = 2_000
-concurrent_sync_tasks = 2
-pre_fetched_blocks_capacity = 10
+da_polling_interval_ms = 6_000
+concurrent_sync_tasks = 1
+pre_fetched_blocks_capacity = 3
 
 [runner.http_config]
 bind_host = "0.0.0.0"

@@ -31,3 +31,7 @@ scripts/acceptance-test/rollup-manager-build/*
 scripts/acceptance-test/rollup-build-cache/*
 
 **/rustc-ice-*.txt
+
+# Testnet secrets — use *.example versions instead
+configs/celestia/rollup.toml
+configs/celestia/genesis.json
