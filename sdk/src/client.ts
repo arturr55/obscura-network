@@ -1,5 +1,6 @@
 // Obscura Network Client — submit transactions to the rollup
 
+import { createStandardRollup } from "@sovereign-sdk/web3";
 import {
   OscuraClientConfig,
   ObscuraSigner,
@@ -54,7 +55,7 @@ export class ObscuraClient {
     const proof = await buildShieldProof(shieldedNote);
 
     const callMsg = {
-      Shield: {
+      shield: {
         note: {
           amount: shieldedNote.note.amount.toString(),
           asset_id: toHex(shieldedNote.note.assetId),
@@ -110,7 +111,7 @@ export class ObscuraClient {
     );
 
     const callMsg = {
-      Transfer: {
+      transfer: {
         proof: Array.from(proof),
         public_inputs: {
           transfer_amount: inputSum.toString(),
@@ -179,43 +180,20 @@ export class ObscuraClient {
       throw new Error(
         "No signer attached. Call client.connect(signer) first.\n" +
         "Browser:  client.connect(await MetaMaskSigner.connect())\n" +
-        "Node.js:  client.connect(new PrivateKeySigner('0x...', nodeUrl))"
+        "Node.js:  client.connect(new PrivateKeySigner('0x...'))"
       );
     }
 
-    // 1. Fetch the rollup's serializer schema (used for EIP-712 type encoding)
-    const schemaRes = await fetch(`${this.nodeUrl}/sequencer/schema`).catch(() => null);
-    const schema = schemaRes?.ok ? await schemaRes.json() : null;
-
-    // 2. Build the RuntimeCall
+    // Build RuntimeCall
     const runtimeCall = { [module]: callMsg };
 
-    // 3. Sign with EIP-712
-    const signature = await this.signer.signTransaction(runtimeCall, schema);
-    const signerAddress = await this.signer.getAddress();
+    // Use @sovereign-sdk/web3 for proper borsh serialization + EIP-712 signing
+    const rollup = await createStandardRollup({ url: this.nodeUrl });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await rollup.call(runtimeCall as any, { signer: this.signer as any });
 
-    // 4. Submit to sequencer
-    const body = {
-      body: {
-        call_message: runtimeCall,
-        signature,
-        pub_key: signerAddress,
-      },
-    };
-
-    const res = await fetch(`${this.nodeUrl}/sequencer/eip712_tx`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Transaction failed (${res.status}): ${err}`);
-    }
-
-    const result = await res.json() as { id?: string; status?: string };
-    console.log(`✅ TX submitted: ${result.id ?? "ok"} (status: ${result.status ?? "pending"})`);
-    return result.id ?? "";
+    const id = (result.response as { id?: string })?.id ?? "";
+    console.log(`✅ TX submitted: ${id}`);
+    return id;
   }
 }

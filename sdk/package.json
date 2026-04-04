@@ -8,13 +8,22 @@
     "build": "tsc",
     "test": "node --experimental-vm-modules node_modules/.bin/jest"
   },
-  "keywords": ["obscura", "zk", "privacy", "rollup", "celestia"],
+  "keywords": [
+    "obscura",
+    "zk",
+    "privacy",
+    "rollup",
+    "celestia"
+  ],
   "license": "MIT",
   "devDependencies": {
-    "typescript": "^5.0.0",
-    "@types/node": "^20.0.0"
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
   },
   "dependencies": {
+    "@noble/secp256k1": "^3.0.0",
+    "@sovereign-sdk/signers": "^0.5.2",
+    "@sovereign-sdk/web3": "^0.12.4",
     "viem": "^2.0.0"
   }
 }

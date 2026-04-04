@@ -49,10 +49,12 @@ export interface ComplianceReport {
   proof: string; // hex
 }
 
-// Signer interface — works with MetaMask (browser) or private key (Node.js)
+// Signer interface compatible with @sovereign-sdk/web3
+// sign(bytes) + publicKey() — what the SDK expects under the hood
 export interface ObscuraSigner {
+  sign(message: Uint8Array): Promise<Uint8Array>;
+  publicKey(): Promise<Uint8Array>;
   getAddress(): Promise<string>;
-  signTransaction(tx: unknown, schema: unknown): Promise<string>;
 }
 
 export interface OscuraClientConfig {
