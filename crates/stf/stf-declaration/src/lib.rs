@@ -84,6 +84,8 @@ where
     pub warp: Warp<S>,
     /// The ValueSetter module (recommended as a starting point for building new modules)
     pub value_setter: value_setter::ValueSetter<S>,
+    /// The Obscura Privacy module — shielded pool with ZK proofs
+    pub obscura_privacy: obscura_privacy::ObscuraPrivacy<S>,
     /// The StateConsistency module, used for acceptance testing
     #[cfg(feature = "acceptance-testing")]
     pub state_consistency: sov_test_state_consistency::StateConsistency<S>,

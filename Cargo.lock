@@ -13447,6 +13447,7 @@ dependencies = [
  "borsh",
  "clap",
  "jsonrpsee",
+ "obscura-privacy",
  "serde",
  "sov-accounts",
  "sov-address",

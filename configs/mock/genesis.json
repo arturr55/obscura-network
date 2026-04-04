@@ -126,6 +126,7 @@
   "merkle_tree_hook": null,
   "warp": null,
   "value_setter": null,
+  "obscura_privacy": null,
   "evm": {
     "accounts": [],
     "contract_creation_policy": "everyone",
