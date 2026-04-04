@@ -32,6 +32,11 @@ use std::marker::PhantomData;
 pub mod types;
 pub mod zk;
 
+/// SP1 proof generation (Phase 2, requires `sp1` feature).
+/// Use prove_transfer(), prove_unshield(), prove_compliance() to generate real ZK proofs.
+#[cfg(feature = "sp1")]
+pub mod sp1_prover;
+
 use types::{AssetId, Commitment, Note, Nullifier};
 
 /// Obscura Privacy Module — shielded pool for private transactions on Celestia DA.

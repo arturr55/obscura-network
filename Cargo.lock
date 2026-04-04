@@ -6979,6 +6979,10 @@ dependencies = [
  "sha2 0.10.9",
  "sov-bank",
  "sov-modules-api",
+ "sp1-prover",
+ "sp1-sdk",
+ "sp1-verifier",
+ "tokio",
 ]
 
 [[package]]

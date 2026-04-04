@@ -14,5 +14,13 @@ borsh = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 hex = "0.4"
 
+# SP1 prover (Phase 2 — real ZK proofs)
+sp1-sdk = { version = "6.0.2", optional = true, features = ["blocking"] }
+sp1-prover = { version = "6.0.2", optional = true }
+sp1-verifier = { version = "6.0.2", optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"], optional = true }
+
 [features]
 native = ["sov-modules-api/native"]
+# Enable real SP1/Groth16 proofs (Phase 2)
+sp1 = ["sp1-sdk", "sp1-verifier", "sp1-prover", "tokio"]
