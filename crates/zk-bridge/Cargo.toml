@@ -1,0 +1,39 @@
+[package]
+name = "obscura-zk-bridge"
+version = "0.1.0"
+edition = "2021"
+description = "ZK Bridge — Ethereum → Obscura USDC bridge with SP1 storage proofs"
+license = "MIT"
+publish = false
+
+[dependencies]
+# Sovereign SDK
+sov-modules-api    = { workspace = true }
+sov-state          = { workspace = true }
+sov-rollup-interface = { workspace = true }
+
+# Serialization
+serde              = { workspace = true }
+serde_json         = { workspace = true }
+borsh              = { workspace = true }
+schemars           = { workspace = true }
+
+# Utilities
+anyhow             = { workspace = true }
+tracing            = { workspace = true }
+sha2               = { workspace = true }
+hex                = "0.4"
+tiny-keccak        = { version = "2", features = ["keccak"] }
+reqwest            = { version = "0.12", features = ["json"], optional = true }
+tokio              = { workspace = true, optional = true }
+
+# SP1 proof verification (host side)
+sp1-sdk           = { version = "6.0.2", optional = true }
+
+[dev-dependencies]
+sov-test-utils = { workspace = true }
+
+[features]
+default = []
+native   = ["sp1-sdk", "reqwest", "tokio"]
+relayer  = ["reqwest", "tokio"]

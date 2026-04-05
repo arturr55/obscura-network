@@ -9,6 +9,7 @@ members = [
   "crates/utils/node-discovery",
   "crates/privacy",
   "crates/sanctions-oracle",
+  "crates/zk-bridge",
   "examples/value-setter",
   "scripts/acceptance-test",
   "scripts/soak-test",
