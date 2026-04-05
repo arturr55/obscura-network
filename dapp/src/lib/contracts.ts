@@ -4,7 +4,35 @@ export const CONTRACTS = {
   token: "0x36cEa233ECc93919D8261d840b2D5918031E7fDA" as Address,
   billing: "0xb14dF903CA08622840706Ea79396b614E2Ea3e27" as Address,
   usdc: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238" as Address,
+  bridge: "0xE629E85f61a4F0E6cee1F18B06332f8ABCD0EDeD" as Address, // V2: 2-of-3 multisig
 };
+
+export const BRIDGE_ABI = [
+  {
+    name: "deposit",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "amount", type: "uint256" },
+      { name: "obscuraRecipient", type: "bytes32" },
+    ],
+    outputs: [],
+  },
+  {
+    name: "totalLocked",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    name: "nextDepositId",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "uint256" }],
+  },
+] as const;
 
 export const BILLING_ABI = [
   {
