@@ -185,8 +185,13 @@ impl SanctionsMerkleTree {
 /// Fetch OFAC SDN XML from treasury.gov.
 pub fn fetch_ofac_sdn() -> Result<String> {
     tracing::info!("Fetching OFAC SDN list from treasury.gov...");
-    let url = "https://www.treasury.gov/ofac/downloads/sdn_advanced.xml";
-    let body = reqwest::blocking::get(url)
+    let url = "https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/SDN_ADVANCED.XML";
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("Mozilla/5.0 (compatible; obscura-sanctions-oracle/1.0)")
+        .build()
+        .map_err(|e| anyhow::anyhow!("build client: {e}"))?;
+    let body = client.get(url)
+        .send()
         .map_err(|e| anyhow::anyhow!("HTTP GET failed: {e}"))?
         .text()
         .map_err(|e| anyhow::anyhow!("reading response: {e}"))?;
@@ -200,22 +205,28 @@ pub fn load_local_sdn(path: &str) -> Result<String> {
 }
 
 /// Extract Ethereum addresses from OFAC SDN XML.
-/// OFAC marks Ethereum addresses with "Digital Currency Address - ETH".
+/// ETH addresses are in Feature elements with FeatureTypeID="345",
+/// inside <VersionDetail>0x...</VersionDetail>.
 pub fn extract_eth_addresses_from_xml(xml: &str) -> Vec<String> {
     let mut addresses = Vec::new();
     let mut search = xml;
-    while let Some(pos) = search.find("Digital Currency Address - ETH") {
-        search = &search[pos..];
-        if let Some(start) = search.find("<versionDetail>") {
-            let after_tag = &search[start + "<versionDetail>".len()..];
-            if let Some(end) = after_tag.find("</versionDetail>") {
-                let addr = after_tag[..end].trim().to_string();
-                if addr.starts_with("0x") || addr.starts_with("0X") {
-                    addresses.push(addr);
+    // Find each ETH feature block
+    while let Some(pos) = search.find("FeatureTypeID=\"345\"") {
+        search = &search[pos + 19..];
+        // Find the VersionDetail tag within the next ~500 chars (stays within the Feature block)
+        let window = &search[..search.len().min(500)];
+        if let Some(start) = window.find("<VersionDetail") {
+            let after_open = &window[start..];
+            if let Some(content_start) = after_open.find('>') {
+                let content = &after_open[content_start + 1..];
+                if let Some(end) = content.find("</VersionDetail>") {
+                    let addr = content[..end].trim().to_string();
+                    if addr.starts_with("0x") || addr.starts_with("0X") {
+                        addresses.push(addr);
+                    }
                 }
             }
         }
-        search = &search[30..];
     }
     addresses
 }
