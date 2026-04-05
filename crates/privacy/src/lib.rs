@@ -39,6 +39,10 @@ pub mod sp1_prover;
 
 use types::{AssetId, Commitment, Note, Nullifier};
 
+/// Maximum age of a sanctions proof in seconds (24 hours).
+/// Proofs older than this are rejected — OFAC list updates daily.
+pub const SANCTIONS_PROOF_MAX_AGE_SECS: u64 = 86_400;
+
 /// Obscura Privacy Module — shielded pool for private transactions on Celestia DA.
 #[derive(Clone, ModuleInfo, ModuleRestApi)]
 pub struct ObscuraPrivacy<S: Spec> {
@@ -71,6 +75,16 @@ pub struct ObscuraPrivacy<S: Spec> {
     #[state]
     pub compliance_total_volume: StateValue<u64>,
 
+    /// Current OFAC SDN Merkle root.
+    /// Updated daily by the sanctions oracle.
+    /// Every Transfer TX must include a sanctions proof against this root.
+    #[state]
+    pub sanctions_root: StateValue<[u8; 32]>,
+
+    /// Address of the sanctions oracle (the only account allowed to update the root).
+    #[state]
+    pub sanctions_oracle: StateValue<Vec<u8>>,
+
     #[phantom]
     pub phantom: PhantomData<S>,
 }
@@ -95,6 +109,9 @@ impl<S: Spec> Module for ObscuraPrivacy<S> {
             }
             CallMessage::Unshield(unshield_msg) => {
                 self.handle_unshield(unshield_msg, context, state)
+            }
+            CallMessage::UpdateSanctionsRoot(msg) => {
+                self.handle_update_sanctions_root(msg, context, state)
             }
         }
     }
@@ -135,15 +152,50 @@ impl<S: Spec> ObscuraPrivacy<S> {
     }
 
     /// Private transfer: spend input notes and create output notes.
-    /// Requires a ZK proof of validity.
+    /// Requires a ZK transfer proof AND a ZK sanctions non-membership proof.
     fn handle_transfer(
         &mut self,
         msg: TransferMessage,
         _context: &Context<S>,
         state: &mut impl TxState<S>,
     ) -> Result<()> {
-        // Verify ZK proof
+        // --- Verify transfer ZK proof ---
         zk::verify_transfer_proof(&msg.proof, &msg.public_inputs)?;
+
+        // --- Verify sanctions non-membership proof ---
+        // Every transfer must prove that the recipient is NOT on the OFAC SDN list.
+
+        // 1. Check that the sanctions root in the proof matches the on-chain root
+        let current_root = self.sanctions_root.get(state)?.unwrap_or([0u8; 32]);
+        if current_root != [0u8; 32] {
+            // Root is set — enforce that proof uses the current root
+            if msg.sanctions_public_inputs.sanctions_root != current_root {
+                bail!(
+                    "Sanctions proof uses stale root. Expected {:?}, got {:?}",
+                    hex::encode(current_root),
+                    hex::encode(msg.sanctions_public_inputs.sanctions_root)
+                );
+            }
+        }
+
+        // 2. Check proof freshness (must be < 24 hours old)
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let proof_age = now_secs.saturating_sub(msg.sanctions_public_inputs.proof_timestamp);
+        if msg.sanctions_public_inputs.proof_timestamp > 0
+            && proof_age > SANCTIONS_PROOF_MAX_AGE_SECS
+        {
+            bail!(
+                "Sanctions proof is too old ({} seconds). Max age is {} seconds.",
+                proof_age,
+                SANCTIONS_PROOF_MAX_AGE_SECS
+            );
+        }
+
+        // 3. Verify the ZK proof itself
+        zk::verify_sanctions_proof(&msg.sanctions_proof, &msg.sanctions_public_inputs)?;
 
         // Check nullifiers not already spent
         for nullifier in &msg.nullifiers {
@@ -183,6 +235,30 @@ impl<S: Spec> ObscuraPrivacy<S> {
                 nullifier_count: msg.nullifiers.len() as u32,
                 output_count: msg.output_commitments.len() as u32,
             },
+        );
+
+        Ok(())
+    }
+
+    /// Update the on-chain OFAC sanctions Merkle root.
+    /// Only the designated sanctions oracle address may call this.
+    fn handle_update_sanctions_root(
+        &mut self,
+        msg: UpdateSanctionsRootMessage,
+        context: &Context<S>,
+        state: &mut impl TxState<S>,
+    ) -> Result<()> {
+        // Check caller is the oracle
+        let oracle = self.sanctions_oracle.get(state)?.unwrap_or_default();
+        if !oracle.is_empty() && context.sender().as_ref() != oracle.as_slice() {
+            bail!("Only the sanctions oracle may update the sanctions root");
+        }
+
+        self.sanctions_root.set(&msg.new_root, state)?;
+
+        self.emit_event(
+            state,
+            PrivacyEvent::SanctionsRootUpdated { new_root: msg.new_root },
         );
 
         Ok(())
@@ -244,6 +320,8 @@ pub enum CallMessage {
     Transfer(TransferMessage),
     /// Withdraw from shielded pool back to public balance
     Unshield(UnshieldMessage),
+    /// Update the OFAC sanctions Merkle root (oracle only)
+    UpdateSanctionsRoot(UpdateSanctionsRootMessage),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, JsonSchema, UniversalWallet)]
@@ -258,12 +336,17 @@ pub struct ShieldMessage {
 pub struct TransferMessage {
     /// ZK proof that inputs balance with outputs and sender knows spending keys
     pub proof: Vec<u8>,
-    /// Public inputs for proof verification
+    /// Public inputs for transfer proof verification
     pub public_inputs: TransferPublicInputs,
     /// Nullifiers of spent input notes
     pub nullifiers: Vec<Nullifier>,
     /// New output commitments
     pub output_commitments: Vec<Commitment>,
+    /// ZK proof that the recipient is NOT on the OFAC SDN sanctions list.
+    /// Required for every transfer — protocol enforces compliance by design.
+    pub sanctions_proof: Vec<u8>,
+    /// Public inputs for sanctions proof verification
+    pub sanctions_public_inputs: SanctionsPublicInputs,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, JsonSchema, UniversalWallet)]
@@ -297,6 +380,14 @@ pub struct UnshieldPublicInputs {
     pub asset_id: AssetId,
 }
 
+/// Message for oracle to update the on-chain OFAC sanctions Merkle root.
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, UniversalWallet)]
+#[serialize(Borsh, Serde)]
+pub struct UpdateSanctionsRootMessage {
+    /// New OFAC SDN Merkle root
+    pub new_root: [u8; 32],
+}
+
 /// Public inputs for sanctions non-membership proof verification.
 /// These values are committed inside the ZK proof and must match
 /// what the verifier expects.
@@ -327,5 +418,9 @@ pub enum PrivacyEvent {
     Unshielded {
         nullifier: [u8; 32],
         amount: u64,
+    },
+    /// Emitted when oracle updates the OFAC sanctions Merkle root.
+    SanctionsRootUpdated {
+        new_root: [u8; 32],
     },
 }
