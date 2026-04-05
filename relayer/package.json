@@ -1,0 +1,15 @@
+{
+  "name": "obscura-bridge-relayer",
+  "version": "0.1.0",
+  "description": "Auto-relayer: watches Ethereum DepositLocked events, submits ClaimDeposit to Obscura rollup",
+  "type": "module",
+  "main": "relayer.mjs",
+  "scripts": {
+    "start": "node relayer.mjs",
+    "dev": "node --watch relayer.mjs"
+  },
+  "dependencies": {
+    "@sovereign-sdk/web3": "*",
+    "viem": "^2.0.0"
+  }
+}

@@ -40,6 +40,31 @@ pub struct ClaimDeposit {
     pub public_inputs: BridgePublicInputs,
 }
 
+/// A withdrawal request: burn bridged-USDC on Obscura, release USDC on Ethereum.
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, UniversalWallet)]
+#[serialize(Borsh, Serde)]
+pub struct WithdrawBridge {
+    /// The original deposit ID on Ethereum to unlock.
+    pub deposit_id: u64,
+    /// Ethereum address to receive the unlocked USDC (20 bytes).
+    pub eth_recipient: [u8; 20],
+}
+
+/// Stored record of a pending/completed withdrawal.
+#[derive(
+    Debug, Clone, PartialEq,
+    serde::Serialize, serde::Deserialize,
+    borsh::BorshSerialize, borsh::BorshDeserialize,
+    schemars::JsonSchema,
+)]
+pub struct WithdrawalRecord {
+    pub withdrawal_id: u64,
+    pub deposit_id: u64,
+    pub eth_recipient: [u8; 20],
+    pub amount: u64,
+    pub relayed: bool,
+}
+
 /// Token denomination for bridged USDC on Obscura.
 pub const BRIDGED_USDC_TOKEN_ID: &str = "bridged-usdc";
 

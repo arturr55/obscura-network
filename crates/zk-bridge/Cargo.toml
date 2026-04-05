@@ -12,6 +12,9 @@ sov-modules-api    = { workspace = true }
 sov-state          = { workspace = true }
 sov-rollup-interface = { workspace = true }
 
+# Obscura Privacy module — for auto-shielding bridged deposits
+obscura-privacy    = { path = "../privacy" }
+
 # Serialization
 serde              = { workspace = true }
 serde_json         = { workspace = true }

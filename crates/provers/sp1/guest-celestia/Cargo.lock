@@ -3954,6 +3954,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "obscura-privacy"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "borsh",
+ "hex",
+ "schemars 0.8.22",
+ "serde",
+ "sha2 0.10.9",
+ "sov-bank",
+ "sov-modules-api",
+ "tracing",
+]
+
+[[package]]
+name = "obscura-zk-bridge"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "borsh",
+ "hex",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sov-modules-api",
+ "sov-rollup-interface",
+ "sov-state",
+ "tiny-keccak",
+ "tracing",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7811,6 +7844,8 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "borsh",
+ "obscura-privacy",
+ "obscura-zk-bridge",
  "serde",
  "sov-accounts",
  "sov-address",

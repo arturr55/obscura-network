@@ -193,8 +193,8 @@ async function claimDeposit(signer, log, blockHash) {
 
 // ── Auto-Shield bridged USDC ──────────────────────────────────────────────────
 
-// Bridged USDC asset ID (asset_id = 2)
-const BRIDGED_USDC_ASSET_ID = "0000000000000000000000000000000000000000000000000000000000000002";
+// Bridged USDC asset ID — must match Rust: AssetId(*b"bridged-usdc-obscura-network-v01")
+const BRIDGED_USDC_ASSET_ID = "627269646765642d757364632d6f6273637572612d6e6574776f726b2d763031";
 
 function bridgeShieldSalt(depositId, obscuraRecipientHex) {
   // Deterministic salt: keccak256("obscura_bridge_shield_v1" || depositId_le8 || recipient_32)
@@ -404,16 +404,8 @@ async function main() {
               blockHash: pending.blockHash,
             };
             const txHash = await claimDeposit(signer, syntheticLog, pending.blockHash);
-            console.log(`  ✅ retry claimed deposit ${pending.depositId}! Obscura TX: ${txHash}`);
+            console.log(`  ✅ retry claimed deposit ${pending.depositId}! Obscura TX: ${txHash} (auto-shielded by bridge module)`);
             state.claimed.push(pending.depositId);
-            try {
-              const shieldTxHash = await autoShield(
-                signer, pending.depositId, pending.obscuraRecipient, pending.amount
-              );
-              console.log(`  🔒 retry auto-shielded! Privacy TX: ${shieldTxHash}`);
-            } catch (e) {
-              console.warn(`  ⚠️  retry auto-shield failed (non-fatal): ${e?.message}`);
-            }
           } catch (e) {
             const msg = e?.message || String(e);
             if (msg.includes("already claimed") || msg.includes("nonce used")) {
@@ -469,22 +461,9 @@ async function main() {
 
         try {
           const txHash = await claimDeposit(signer, log, log.blockHash);
-          console.log(`  ✅ claimed! Obscura TX: ${txHash}`);
+          console.log(`  ✅ claimed + auto-shielded! Obscura TX: ${txHash}`);
           state.claimed.push(depositId);
           saveState(state);
-
-          // Auto-shield: move bridged USDC into the privacy pool
-          try {
-            const shieldTxHash = await autoShield(
-              signer,
-              depositId,
-              log.args.obscuraRecipient,
-              log.args.amount
-            );
-            console.log(`  🔒 auto-shielded! Privacy TX: ${shieldTxHash}`);
-          } catch (e) {
-            console.warn(`  ⚠️  auto-shield failed (non-fatal): ${e?.message}`);
-          }
         } catch (e) {
           const msg = e?.message || String(e);
           if (msg.includes("already claimed") || msg.includes("nonce used")) {

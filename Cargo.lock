@@ -6983,6 +6983,7 @@ dependencies = [
  "sp1-sdk",
  "sp1-verifier",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -6993,6 +6994,7 @@ dependencies = [
  "bincode",
  "borsh",
  "hex",
+ "obscura-privacy",
  "reqwest 0.12.28",
  "schemars 0.8.22",
  "serde",

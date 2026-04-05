@@ -171,7 +171,8 @@ impl<S: Spec> Module for ObscuraPrivacy<S> {
 impl<S: Spec> ObscuraPrivacy<S> {
     /// Insert a commitment leaf into the Incremental Merkle Tree.
     /// Updates filled_subtrees, merkle_root, and the historical roots ring buffer.
-    fn insert_commitment(
+    /// Public so that other modules (e.g. ObscuraBridge) can call it during atomic operations.
+    pub fn insert_commitment(
         &mut self,
         commitment: &Commitment,
         state: &mut impl TxState<S>,

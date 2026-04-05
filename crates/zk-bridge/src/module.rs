@@ -16,7 +16,8 @@ use sov_modules_api::{
 use sov_rollup_interface::da::DaSpec;
 use std::marker::PhantomData;
 
-use crate::types::{BridgeConfig, ClaimDeposit};
+use crate::types::{BridgeConfig, ClaimDeposit, WithdrawBridge, WithdrawalRecord};
+use obscura_privacy::{ObscuraPrivacy, types::{AssetId, Commitment}};
 
 #[allow(dead_code)] // will be used when UpdateConfig is added
 use crate::verifier::verify_bridge_proof;
@@ -45,6 +46,26 @@ pub struct ObscuraBridge<S: Spec> {
     #[state]
     pub total_claims: StateValue<u64>,
 
+    /// Per-deposit claimed amount: deposit_id → amount (for withdrawal lookups)
+    #[state]
+    pub claimed_amounts: StateMap<u64, u64>,
+
+    /// Pending/completed withdrawals: withdrawal_id → WithdrawalRecord
+    #[state]
+    pub withdrawals: StateMap<u64, WithdrawalRecord>,
+
+    /// Auto-increment withdrawal ID
+    #[state]
+    pub next_withdrawal_id: StateValue<u64>,
+
+    /// Total USDC withdrawn back to Ethereum
+    #[state]
+    pub total_withdrawn_usdc: StateValue<u64>,
+
+    /// Reference to the privacy module — used to auto-shield deposits into the shielded pool.
+    #[module]
+    pub obscura_privacy: ObscuraPrivacy<S>,
+
     #[phantom]
     pub phantom: PhantomData<S>,
 }
@@ -58,6 +79,9 @@ pub enum BridgeCallMessage {
     /// Claim a locked USDC deposit from Ethereum.
     /// Submitted by the relayer after generating the SP1 storage proof.
     ClaimDeposit(ClaimDeposit),
+    /// Request withdrawal: burn bridged-USDC on Obscura, unlock USDC on Ethereum.
+    /// Submitted by the user via the dApp.
+    WithdrawBridge(WithdrawBridge),
 }
 
 // ── Events ────────────────────────────────────────────────────────────────────
@@ -72,6 +96,14 @@ pub enum BridgeEvent {
         obscura_recipient: [u8; 32],
         amount: u64,
         eth_block_hash: [u8; 32],
+    },
+    /// Emitted when a withdrawal is initiated on Obscura.
+    /// The relayer watches for this and calls release() on Ethereum.
+    WithdrawalInitiated {
+        withdrawal_id: u64,
+        deposit_id: u64,
+        eth_recipient: [u8; 20],
+        amount: u64,
     },
     /// Emitted when bridge config is updated.
     ConfigUpdated,
@@ -95,6 +127,8 @@ impl<S: Spec> Module for ObscuraBridge<S> {
         self.config.set(config, state)?;
         self.total_bridged_usdc.set(&0u64, state)?;
         self.total_claims.set(&0u64, state)?;
+        self.next_withdrawal_id.set(&0u64, state)?;
+        self.total_withdrawn_usdc.set(&0u64, state)?;
         tracing::info!(
             "ObscuraBridge genesis: contract={}",
             config.bridge_contract_address
@@ -111,6 +145,9 @@ impl<S: Spec> Module for ObscuraBridge<S> {
         match msg {
             BridgeCallMessage::ClaimDeposit(claim) => {
                 self.handle_claim_deposit(claim, context, state)
+            }
+            BridgeCallMessage::WithdrawBridge(withdraw) => {
+                self.handle_withdraw_bridge(withdraw, context, state)
             }
         }
     }
@@ -159,17 +196,25 @@ impl<S: Spec> ObscuraBridge<S> {
         verify_bridge_proof(&claim.proof, inputs)
             .map_err(|e| anyhow::anyhow!("Bridge: proof verification failed: {e}"))?;
 
-        // ── 5. Mark deposit as processed ───────────────────────────────────
-        self.processed_deposits.set(&deposit_key, &true, state)?; // mark as processed
+        // ── 5. Mark deposit as processed + store amount ────────────────────
+        self.processed_deposits.set(&deposit_key, &true, state)?;
+        self.claimed_amounts.set(&inputs.deposit_id, &inputs.amount, state)?;
 
-        // ── 6. Mint bridged-USDC to obscura_recipient ──────────────────────
-        // Note: In the full integration, this calls sov-bank to mint tokens.
-        // For Phase 1: we track balance in a simple state map and emit the event.
-        // The dApp reads the event to credit the recipient's shielded balance.
-        //
-        // Phase 2: integrate with sov-bank:
-        //   let token_id = TokenId::from(BRIDGED_USDC_TOKEN_ID);
-        //   self.bank.mint(token_id, obscura_recipient, inputs.amount, state)?;
+        // ── 6. Auto-shield: insert commitment into the privacy module ──────
+        // The user passes their pre-computed Note commitment as `obscura_recipient`.
+        // We insert it directly into the Merkle tree so the bridged USDC lands in
+        // the shielded pool atomically — no separate Shield TX required.
+        let commitment = Commitment(inputs.obscura_recipient);
+        self.obscura_privacy.commitments.push(&commitment, state)?;
+        self.obscura_privacy.insert_commitment(&commitment, state)?;
+
+        // Update shielded supply for bridged-USDC asset
+        let bridged_usdc_asset = AssetId(*b"bridged-usdc-obscura-network-v01");
+        let current_shielded = self.obscura_privacy.shielded_supply
+            .get(&bridged_usdc_asset, state)?
+            .unwrap_or(0);
+        self.obscura_privacy.shielded_supply
+            .set(&bridged_usdc_asset, &(current_shielded + inputs.amount), state)?;
 
         let prev_total = self.total_bridged_usdc.get(state)?.unwrap_or(0);
         self.total_bridged_usdc.set(&(prev_total + inputs.amount), state)?;
@@ -178,7 +223,7 @@ impl<S: Spec> ObscuraBridge<S> {
         self.total_claims.set(&(prev_claims + 1), state)?;
 
         tracing::info!(
-            "Bridge: claimed deposit {} — {} USDC → {:?}",
+            "Bridge: claimed deposit {} — {} USDC auto-shielded as commitment {}",
             inputs.deposit_id,
             inputs.amount,
             hex::encode(inputs.obscura_recipient)
@@ -192,6 +237,72 @@ impl<S: Spec> ObscuraBridge<S> {
                 obscura_recipient: inputs.obscura_recipient,
                 amount: inputs.amount,
                 eth_block_hash: inputs.eth_block_hash,
+            },
+        );
+
+        Ok(())
+    }
+
+    fn handle_withdraw_bridge(
+        &mut self,
+        msg: WithdrawBridge,
+        _context: &Context<S>,
+        state: &mut impl TxState<S>,
+    ) -> Result<()> {
+        // ── 1. Check deposit was claimed ───────────────────────────────────
+        let config = self.config.get(state)?.unwrap_or_default();
+        let contract = parse_contract_address(&config.bridge_contract_address)?;
+        let deposit_key = make_deposit_key_str(&contract, msg.deposit_id);
+
+        if !self.processed_deposits.get(&deposit_key, state)?.unwrap_or(false) {
+            bail!("Bridge: deposit {} was not claimed on Obscura", msg.deposit_id);
+        }
+
+        // ── 2. Check not already withdrawn ────────────────────────────────
+        let withdrawal_key = format!("wd_{}", msg.deposit_id);
+        if self.processed_deposits.get(&withdrawal_key, state)?.unwrap_or(false) {
+            bail!("Bridge: deposit {} already withdrawn", msg.deposit_id);
+        }
+
+        // ── 3. Get claimed amount ──────────────────────────────────────────
+        let amount = self.claimed_amounts.get(&msg.deposit_id, state)?.unwrap_or(0);
+        if amount == 0 {
+            bail!("Bridge: no claimed amount found for deposit {}", msg.deposit_id);
+        }
+
+        // ── 4. Record withdrawal ───────────────────────────────────────────
+        let withdrawal_id = self.next_withdrawal_id.get(state)?.unwrap_or(0);
+        self.next_withdrawal_id.set(&(withdrawal_id + 1), state)?;
+        self.processed_deposits.set(&withdrawal_key, &true, state)?;
+
+        let record = WithdrawalRecord {
+            withdrawal_id,
+            deposit_id: msg.deposit_id,
+            eth_recipient: msg.eth_recipient,
+            amount,
+            relayed: false,
+        };
+        self.withdrawals.set(&withdrawal_id, &record, state)?;
+
+        let prev_withdrawn = self.total_withdrawn_usdc.get(state)?.unwrap_or(0);
+        self.total_withdrawn_usdc.set(&(prev_withdrawn + amount), state)?;
+
+        tracing::info!(
+            "Bridge: withdrawal {} initiated — deposit {} {} USDC → 0x{}",
+            withdrawal_id,
+            msg.deposit_id,
+            amount,
+            hex::encode(msg.eth_recipient)
+        );
+
+        // ── 5. Emit event ──────────────────────────────────────────────────
+        self.emit_event(
+            state,
+            BridgeEvent::WithdrawalInitiated {
+                withdrawal_id,
+                deposit_id: msg.deposit_id,
+                eth_recipient: msg.eth_recipient,
+                amount,
             },
         );
 

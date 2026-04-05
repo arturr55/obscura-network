@@ -4,6 +4,81 @@ import { useAccount } from "wagmi";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import Link from "next/link";
 import { PLANS } from "@/lib/contracts";
+import { useEffect, useState } from "react";
+
+interface NetworkStats {
+  slot: number | null;
+  nodeOnline: boolean;
+  oracleOnline: boolean;
+  sanctionsAddresses: number | null;
+  ts: number;
+}
+
+function LiveStats() {
+  const [stats, setStats] = useState<NetworkStats | null>(null);
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const r = await fetch("/api/stats");
+        if (r.ok) setStats(await r.json());
+      } catch {}
+    }
+    load();
+    const t = setInterval(load, 15_000);
+    return () => clearInterval(t);
+  }, []);
+
+  const dot = (on: boolean) => (
+    <span
+      className={`inline-block w-2 h-2 rounded-full mr-1.5 ${
+        on ? "bg-green-400 animate-pulse" : "bg-gray-600"
+      }`}
+    />
+  );
+
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="bg-obscura-card border border-obscura-border rounded-xl p-4 text-center">
+        <div className="text-white font-semibold">
+          {stats === null ? (
+            <span className="text-gray-600">—</span>
+          ) : stats.slot !== null ? (
+            <>#{stats.slot.toLocaleString()}</>
+          ) : (
+            <span className="text-gray-600">offline</span>
+          )}
+        </div>
+        <div className="text-gray-500 text-sm mt-1 flex items-center justify-center">
+          {dot(!!stats?.nodeOnline)}
+          Rollup Slot
+        </div>
+      </div>
+
+      <div className="bg-obscura-card border border-obscura-border rounded-xl p-4 text-center">
+        <div className="text-white font-semibold">Celestia DA</div>
+        <div className="text-gray-500 text-sm mt-1">DA Layer</div>
+      </div>
+
+      <div className="bg-obscura-card border border-obscura-border rounded-xl p-4 text-center">
+        <div className="text-white font-semibold">
+          {stats?.sanctionsAddresses != null
+            ? stats.sanctionsAddresses.toLocaleString()
+            : "87"}
+        </div>
+        <div className="text-gray-500 text-sm mt-1 flex items-center justify-center">
+          {dot(!!stats?.oracleOnline)}
+          OFAC Addresses
+        </div>
+      </div>
+
+      <div className="bg-obscura-card border border-obscura-border rounded-xl p-4 text-center">
+        <div className="text-white font-semibold">SP1 / Groth16</div>
+        <div className="text-gray-500 text-sm mt-1">ZK Proofs</div>
+      </div>
+    </div>
+  );
+}
 
 export default function Home() {
   const { isConnected } = useAccount();
@@ -59,18 +134,26 @@ export default function Home() {
 
       {/* Stats */}
       <section className="max-w-6xl mx-auto px-4 pb-16">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {[
-            { label: "Network", value: "Celestia DA" },
-            { label: "ZK Proofs", value: "SP1 / Groth16" },
-            { label: "Privacy", value: "Default ON" },
-            { label: "Token", value: "OBSCURA" },
-          ].map((s) => (
-            <div key={s.label} className="bg-obscura-card border border-obscura-border rounded-xl p-4 text-center">
-              <div className="text-white font-semibold">{s.value}</div>
-              <div className="text-gray-500 text-sm mt-1">{s.label}</div>
-            </div>
-          ))}
+        <LiveStats />
+      </section>
+
+      {/* ZKCompliance Banner */}
+      <section className="max-w-6xl mx-auto px-4 pb-16">
+        <div className="bg-gradient-to-br from-green-900/20 to-purple-900/20 border border-green-700/30 rounded-2xl p-8 flex flex-col md:flex-row items-center justify-between gap-6">
+          <div>
+            <div className="text-green-400 text-xs font-bold tracking-widest mb-2">PROTOCOL-NATIVE COMPLIANCE</div>
+            <h2 className="text-2xl font-bold text-white mb-2">Privacy AND compliance. Not a trade-off.</h2>
+            <p className="text-gray-400 max-w-lg">
+              Every transfer proves OFAC non-membership with ZK proofs. Regulators see compliance — not amounts, not addresses.
+              Tornado Cash was blocked because it offered privacy <em>without</em> compliance. Obscura offers both.
+            </p>
+          </div>
+          <Link
+            href="/compliance"
+            className="bg-green-700 hover:bg-green-600 text-white px-7 py-3 rounded-xl font-semibold transition-colors whitespace-nowrap shrink-0"
+          >
+            Learn ZKCompliance →
+          </Link>
         </div>
       </section>
 
