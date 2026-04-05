@@ -7,10 +7,19 @@
     "reward_address": "0xA6edfca3AA985Dd3CC728BFFB700933a986aC085"
   },
   "attester_incentives": {
-    "minimum_attester_bond": [1000, 1000],
-    "minimum_challenger_bond": [1000, 1000],
+    "minimum_attester_bond": [
+      1000,
+      1000
+    ],
+    "minimum_challenger_bond": [
+      1000,
+      1000
+    ],
     "initial_attesters": [
-      ["0xA6edfca3AA985Dd3CC728BFFB700933a986aC085", "200000"]
+      [
+        "0xA6edfca3AA985Dd3CC728BFFB700933a986aC085",
+        "200000"
+      ]
     ],
     "rollup_finality_period": 5,
     "maximum_attested_height": 0,
@@ -73,15 +82,35 @@
           "1000000000"
         ]
       ],
-      "admins": ["0xA6edfca3AA985Dd3CC728BFFB700933a986aC085"]
+      "admins": [
+        "0xA6edfca3AA985Dd3CC728BFFB700933a986aC085"
+      ]
     },
     "tokens": []
   },
   "chain_state": {
     "current_time": 0,
     "operating_mode": "operator",
-    "inner_code_commitment": [0, 0, 0, 0, 0, 0, 0, 0],
-    "outer_code_commitment": [0, 0, 0, 0, 0, 0, 0, 0],
+    "inner_code_commitment": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "outer_code_commitment": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
     "genesis_da_height": 0
   },
   "paymaster": {
@@ -103,10 +132,19 @@
     ]
   },
   "prover_incentives": {
-    "proving_penalty": [10, 10],
-    "minimum_bond": [1000, 1000],
+    "proving_penalty": [
+      10,
+      10
+    ],
+    "minimum_bond": [
+      1000,
+      1000
+    ],
     "initial_provers": [
-      ["0xA6edfca3AA985Dd3CC728BFFB700933a986aC085", "200000"]
+      [
+        "0xA6edfca3AA985Dd3CC728BFFB700933a986aC085",
+        "200000"
+      ]
     ]
   },
   "sequencer_registry": {
@@ -142,7 +180,51 @@
         "max_change_denominator": 8,
         "elasticity_multiplier": 2
       },
-      "hardforks": [[0, "CANCUN"]]
+      "hardforks": [
+        [
+          0,
+          "CANCUN"
+        ]
+      ]
     }
+  },
+  "obscura_bridge": {
+    "bridge_contract_address": "0xb8b2d410119097A4E50B4c2aC3Fa9db1738Ba175",
+    "vk_hash": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "max_proof_age_secs": 604800,
+    "admin": []
   }
 }

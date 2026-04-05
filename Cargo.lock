@@ -6990,6 +6990,7 @@ name = "obscura-zk-bridge"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bincode",
  "borsh",
  "hex",
  "reqwest 0.12.28",
@@ -13503,6 +13504,7 @@ dependencies = [
  "clap",
  "jsonrpsee",
  "obscura-privacy",
+ "obscura-zk-bridge",
  "serde",
  "sov-accounts",
  "sov-address",

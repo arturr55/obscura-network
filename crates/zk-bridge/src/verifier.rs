@@ -15,10 +15,9 @@ pub const BRIDGE_VK_HASH: &str =
     "0x0000000000000000000000000000000000000000000000000000000000000000";
 
 /// ELF bytes of the compiled SP1 bridge guest circuit.
-/// Only included when building with `native` feature.
+/// Phase 2: compile with `cargo prove build` in guest-bridge/, then uncomment.
 #[cfg(feature = "native")]
-pub const BRIDGE_ELF: &[u8] =
-    include_bytes!("../../provers/sp1/guest-bridge/elf/eth-deposit");
+pub const BRIDGE_ELF: &[u8] = &[]; // TODO Phase 2: include_bytes!("../../provers/sp1/guest-bridge/elf/eth-deposit")
 
 /// Mock proof prefix used on testnet (no real ZK computation).
 pub const MOCK_PROOF_PREFIX: &[u8] = b"OBSbridge";
@@ -47,32 +46,12 @@ pub fn verify_bridge_proof(proof: &[u8], public_inputs: &BridgePublicInputs) -> 
 }
 
 #[cfg(feature = "native")]
-fn verify_sp1_proof(proof: &[u8], public_inputs: &BridgePublicInputs) -> Result<()> {
-    use sp1_sdk::{ProverClient, SP1VerifyingKey, SP1Proof};
-
-    // Deserialize the SP1 compressed proof
-    let sp1_proof: SP1Proof = bincode::deserialize(proof)
-        .map_err(|e| anyhow::anyhow!("Bridge: failed to deserialize SP1 proof: {e}"))?;
-
-    // Load verifying key from the compiled ELF
-    let client = ProverClient::new();
-    let (_pk, vk) = client.setup(BRIDGE_ELF);
-
-    // Build expected public values: serialize BridgePublicInputs
-    let expected_pub_vals = borsh::to_vec(public_inputs)
-        .map_err(|e| anyhow::anyhow!("Bridge: failed to serialize public inputs: {e}"))?;
-
-    // Verify the proof
-    client.verify(&sp1_proof, &vk)
-        .map_err(|e| anyhow::anyhow!("Bridge: SP1 proof verification failed: {e}"))?;
-
-    // Check public values match
-    let committed = sp1_proof.public_values.as_slice();
-    if committed != expected_pub_vals.as_slice() {
-        bail!("Bridge: public values mismatch — committed {:?} != expected {:?}",
-              &committed[..committed.len().min(32)],
-              &expected_pub_vals[..expected_pub_vals.len().min(32)]);
-    }
-
-    Ok(())
+fn verify_sp1_proof(_proof: &[u8], _public_inputs: &BridgePublicInputs) -> Result<()> {
+    // Phase 2: implement real SP1 Groth16 verification.
+    // Requires:
+    //   1. Compile guest-bridge with `cargo prove build`
+    //   2. Uncomment BRIDGE_ELF include_bytes! above
+    //   3. Use sp1_sdk::ProverClient::builder().mock().build() for local verify
+    //      or sp1_sdk::ProverClient::builder().network().build() for network prover
+    bail!("Bridge: real SP1 verification not yet implemented. Phase 2 feature.")
 }

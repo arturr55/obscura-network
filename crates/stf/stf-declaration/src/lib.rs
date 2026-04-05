@@ -86,6 +86,8 @@ where
     pub value_setter: value_setter::ValueSetter<S>,
     /// The Obscura Privacy module — shielded pool with ZK proofs
     pub obscura_privacy: obscura_privacy::ObscuraPrivacy<S>,
+    /// The Obscura ZK Bridge — Ethereum → Obscura USDC bridge
+    pub obscura_bridge: obscura_zk_bridge::module::ObscuraBridge<S>,
     /// The StateConsistency module, used for acceptance testing
     #[cfg(feature = "acceptance-testing")]
     pub state_consistency: sov_test_state_consistency::StateConsistency<S>,

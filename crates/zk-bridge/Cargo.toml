@@ -29,11 +29,12 @@ tokio              = { workspace = true, optional = true }
 
 # SP1 proof verification (host side)
 sp1-sdk           = { version = "6.0.2", optional = true }
+bincode           = { version = "1", optional = true }
 
 [dev-dependencies]
 sov-test-utils = { workspace = true }
 
 [features]
 default = []
-native   = ["sp1-sdk", "reqwest", "tokio"]
+native   = ["sp1-sdk", "reqwest", "tokio", "bincode"]
 relayer  = ["reqwest", "tokio"]
