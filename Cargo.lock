@@ -9988,6 +9988,7 @@ name = "sanctions-oracle"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum 0.7.9",
  "clap",
  "hex",
  "quick-xml",
@@ -9995,6 +9996,10 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber 0.3.23",
 ]
 
 [[package]]

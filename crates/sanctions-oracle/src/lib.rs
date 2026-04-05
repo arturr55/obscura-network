@@ -14,6 +14,8 @@
 //! - Sentinel max `[0xff; 32]` is always inserted at last index
 //!   This ensures every real address always has valid adjacent neighbours.
 
+pub mod server;
+
 use anyhow::{bail, Result};
 use sha2::{Digest, Sha256};
 
@@ -178,6 +180,44 @@ impl SanctionsMerkleTree {
         let addr_hash = hash_addr(address);
         self.sorted_addr_hashes.binary_search(&addr_hash).is_ok()
     }
+}
+
+/// Fetch OFAC SDN XML from treasury.gov.
+pub fn fetch_ofac_sdn() -> Result<String> {
+    tracing::info!("Fetching OFAC SDN list from treasury.gov...");
+    let url = "https://www.treasury.gov/ofac/downloads/sdn_advanced.xml";
+    let body = reqwest::blocking::get(url)
+        .map_err(|e| anyhow::anyhow!("HTTP GET failed: {e}"))?
+        .text()
+        .map_err(|e| anyhow::anyhow!("reading response: {e}"))?;
+    Ok(body)
+}
+
+/// Load SDN XML from a local file.
+pub fn load_local_sdn(path: &str) -> Result<String> {
+    std::fs::read_to_string(path)
+        .map_err(|e| anyhow::anyhow!("reading {path}: {e}"))
+}
+
+/// Extract Ethereum addresses from OFAC SDN XML.
+/// OFAC marks Ethereum addresses with "Digital Currency Address - ETH".
+pub fn extract_eth_addresses_from_xml(xml: &str) -> Vec<String> {
+    let mut addresses = Vec::new();
+    let mut search = xml;
+    while let Some(pos) = search.find("Digital Currency Address - ETH") {
+        search = &search[pos..];
+        if let Some(start) = search.find("<versionDetail>") {
+            let after_tag = &search[start + "<versionDetail>".len()..];
+            if let Some(end) = after_tag.find("</versionDetail>") {
+                let addr = after_tag[..end].trim().to_string();
+                if addr.starts_with("0x") || addr.starts_with("0X") {
+                    addresses.push(addr);
+                }
+            }
+        }
+        search = &search[30..];
+    }
+    addresses
 }
 
 /// Parse Ethereum-style hex addresses (0x...) from a list of strings.
