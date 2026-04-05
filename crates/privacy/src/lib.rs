@@ -24,11 +24,13 @@ use anyhow::{bail, Result};
 use schemars::JsonSchema;
 use sov_modules_api::macros::{serialize, UniversalWallet};
 use sov_modules_api::{
-    Context, EventEmitter, Module, ModuleId, ModuleInfo, ModuleRestApi, Spec,
-    StateMap, StateValue, StateVec, TxState,
+    Context, DaSpec, EventEmitter, GenesisState, Module, ModuleId, ModuleInfo,
+    ModuleRestApi, Spec, StateMap, StateValue, StateVec, TxState,
 };
+use merkle::{compute_insert, zero_value, ROOTS_HISTORY_SIZE, TREE_DEPTH};
 use std::marker::PhantomData;
 
+pub mod merkle;
 pub mod types;
 pub mod zk;
 
@@ -50,10 +52,35 @@ pub struct ObscuraPrivacy<S: Spec> {
     #[id]
     pub id: ModuleId,
 
-    /// Set of all commitments (Merkle leaf nodes) — public, but hiding
-    /// Each commitment is H(amount, asset_id, owner_pubkey, salt)
+    /// Flat list of all commitments in insertion order (for off-chain tree rebuild).
+    /// Index i corresponds to leaf i in the Merkle tree.
     #[state]
     pub commitments: StateVec<Commitment>,
+
+    // ── Incremental Merkle Tree state ──────────────────────────────────────
+
+    /// Current Merkle root of the commitment tree.
+    #[state]
+    pub merkle_root: StateValue<[u8; 32]>,
+
+    /// Next leaf index (= total number of commitments inserted).
+    #[state]
+    pub merkle_next_index: StateValue<u64>,
+
+    /// Filled subtrees: one hash per tree level (0 = leaf level).
+    /// Key: level (u32), Value: hash of the rightmost filled subtree at that level.
+    #[state]
+    pub merkle_filled_subtrees: StateMap<u32, [u8; 32]>,
+
+    /// Ring buffer of historical roots.
+    /// Key: slot index (u64 mod ROOTS_HISTORY_SIZE), Value: root hash.
+    /// Allows ZK proofs generated slightly before the latest insertion to remain valid.
+    #[state]
+    pub merkle_roots: StateMap<u64, [u8; 32]>,
+
+    /// Total number of roots ever recorded (used for ring-buffer indexing).
+    #[state]
+    pub merkle_roots_count: StateValue<u64>,
 
     /// Set of spent nullifiers — public
     /// Each nullifier is H(spending_key, commitment)
@@ -96,6 +123,30 @@ impl<S: Spec> Module for ObscuraPrivacy<S> {
     type Event = PrivacyEvent;
     type Error = anyhow::Error;
 
+    fn genesis(
+        &mut self,
+        _genesis_rollup_header: &<<S as Spec>::Da as DaSpec>::BlockHeader,
+        _config: &Self::Config,
+        state: &mut impl GenesisState<S>,
+    ) -> Result<()> {
+        // Initialise the empty Incremental Merkle Tree.
+        // Each filled_subtree[level] starts as the zero value at that level.
+        for level in 0..TREE_DEPTH {
+            self.merkle_filled_subtrees
+                .set(&(level as u32), &zero_value(level), state)?;
+        }
+        self.merkle_root.set(&merkle::empty_root(), state)?;
+        self.merkle_next_index.set(&0u64, state)?;
+        self.merkle_roots_count.set(&0u64, state)?;
+        self.compliance_tx_count.set(&0u64, state)?;
+        self.compliance_total_volume.set(&0u64, state)?;
+        tracing::info!(
+            "ObscuraPrivacy genesis: empty Merkle root = {}",
+            hex::encode(merkle::empty_root())
+        );
+        Ok(())
+    }
+
     fn call(
         &mut self,
         msg: Self::CallMessage,
@@ -118,6 +169,73 @@ impl<S: Spec> Module for ObscuraPrivacy<S> {
 }
 
 impl<S: Spec> ObscuraPrivacy<S> {
+    /// Insert a commitment leaf into the Incremental Merkle Tree.
+    /// Updates filled_subtrees, merkle_root, and the historical roots ring buffer.
+    fn insert_commitment(
+        &mut self,
+        commitment: &Commitment,
+        state: &mut impl TxState<S>,
+    ) -> Result<()> {
+        let next_index = self.merkle_next_index.get(state)?.unwrap_or(0u64);
+
+        if next_index >= (1u64 << TREE_DEPTH) {
+            bail!("Merkle tree is full");
+        }
+
+        let leaf: [u8; 32] = commitment.0;
+
+        // Pre-read all filled subtrees before passing to compute_insert
+        // (avoids conflicting borrows of self + state inside a closure).
+        let mut filled_cache: Vec<[u8; 32]> = Vec::with_capacity(TREE_DEPTH);
+        for level in 0..TREE_DEPTH {
+            let val = self
+                .merkle_filled_subtrees
+                .get(&(level as u32), state)?
+                .unwrap_or_else(|| zero_value(level));
+            filled_cache.push(val);
+        }
+
+        let (new_root, updates) =
+            compute_insert(leaf, next_index, |level| filled_cache[level]);
+
+        // Persist updated filled subtrees
+        for (level, val) in updates {
+            self.merkle_filled_subtrees
+                .set(&(level as u32), &val, state)?;
+        }
+
+        // Update root
+        self.merkle_root.set(&new_root, state)?;
+
+        // Record root in ring buffer
+        let roots_count = self.merkle_roots_count.get(state)?.unwrap_or(0u64);
+        let slot = roots_count % ROOTS_HISTORY_SIZE;
+        self.merkle_roots.set(&slot, &new_root, state)?;
+        self.merkle_roots_count.set(&(roots_count + 1), state)?;
+
+        // Advance leaf counter
+        self.merkle_next_index.set(&(next_index + 1), state)?;
+
+        Ok(())
+    }
+
+    /// Check whether a given root is in the historical roots ring buffer.
+    fn is_known_root(&self, root: &[u8; 32], state: &mut impl TxState<S>) -> Result<bool> {
+        let roots_count = self.merkle_roots_count.get(state)?.unwrap_or(0u64);
+        if roots_count == 0 {
+            return Ok(false);
+        }
+        for i in 0..roots_count.min(ROOTS_HISTORY_SIZE) {
+            let slot = i % ROOTS_HISTORY_SIZE;
+            if let Some(r) = self.merkle_roots.get(&slot, state)? {
+                if &r == root {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+
     /// Shield public tokens into the private pool.
     /// Creates a commitment note that can be spent privately later.
     fn handle_shield(
@@ -129,8 +247,11 @@ impl<S: Spec> ObscuraPrivacy<S> {
         // Verify the commitment is well-formed
         let commitment = Commitment::from_note(&msg.note)?;
 
-        // Record the commitment in state (appended to Merkle tree)
+        // Append to flat list (for off-chain tree rebuild via REST API)
         self.commitments.push(&commitment, state)?;
+
+        // Insert into the Incremental Merkle Tree and update the root
+        self.insert_commitment(&commitment, state)?;
 
         // Update shielded supply
         let asset_id = msg.note.asset_id.clone();
@@ -159,6 +280,20 @@ impl<S: Spec> ObscuraPrivacy<S> {
         _context: &Context<S>,
         state: &mut impl TxState<S>,
     ) -> Result<()> {
+        // --- Verify Merkle root is known ---
+        // The proof claims inputs exist in root R. R must be in our history.
+        let claimed_root = &msg.public_inputs.merkle_root;
+        if claimed_root != &[0u8; 32] {
+            // Allow [0;32] only during Phase 1 (mock proofs). In Phase 2 this
+            // branch is always taken because SP1 proofs always commit to a root.
+            if !self.is_known_root(claimed_root, state)? {
+                bail!(
+                    "Unknown Merkle root: {}. Root may be too old or the note was never shielded.",
+                    hex::encode(claimed_root)
+                );
+            }
+        }
+
         // --- Verify transfer ZK proof ---
         zk::verify_transfer_proof(&msg.proof, &msg.public_inputs)?;
 
@@ -216,6 +351,7 @@ impl<S: Spec> ObscuraPrivacy<S> {
         // Add output commitments to the tree
         for commitment in &msg.output_commitments {
             self.commitments.push(commitment, state)?;
+            self.insert_commitment(commitment, state)?;
         }
 
         // Update compliance counters
