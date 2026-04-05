@@ -39,6 +39,37 @@ fn hash_nullifier(spending_key: &[u8; 32], commitment: &[u8; 32]) -> [u8; 32] {
     h.finalize().into()
 }
 
+/// Hash two Merkle nodes: SHA256(left ‖ right).
+/// Must match `merkle::hash_pair` in the rollup exactly.
+fn hash_pair(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(left);
+    h.update(right);
+    h.finalize().into()
+}
+
+/// Verify a Merkle inclusion proof.
+/// Returns true if `leaf` is at `leaf_index` in a tree whose root is `root`,
+/// using `siblings` as the sibling hashes from leaf level up to root level.
+fn verify_merkle_inclusion(
+    leaf: [u8; 32],
+    leaf_index: u64,
+    siblings: &[[u8; 32]],
+    root: [u8; 32],
+) -> bool {
+    let mut current = leaf;
+    let mut index = leaf_index;
+    for sibling in siblings {
+        if index & 1 == 0 {
+            current = hash_pair(&current, sibling);
+        } else {
+            current = hash_pair(sibling, &current);
+        }
+        index >>= 1;
+    }
+    current == root
+}
+
 pub fn main() {
     // Read private witness
     let witness: TransferWitness = sp1_zkvm::io::read();
@@ -74,7 +105,32 @@ pub fn main() {
         .fold(0u64, |acc, a| acc.checked_add(a).expect("output overflow"));
     assert_eq!(input_sum, output_sum, "input sum must equal output sum");
 
-    // --- Constraint 4: compute nullifiers (proves spending key knowledge) ---
+    // --- Constraint 4: Merkle inclusion — every input note must be in merkle_root ---
+    assert_eq!(
+        witness.leaf_indices.len(),
+        witness.inputs.len(),
+        "leaf_indices count must match input count"
+    );
+    assert_eq!(
+        witness.merkle_paths.len(),
+        witness.inputs.len(),
+        "merkle_paths count must match input count"
+    );
+    for ((note, &leaf_index), siblings) in witness
+        .inputs
+        .iter()
+        .zip(witness.leaf_indices.iter())
+        .zip(witness.merkle_paths.iter())
+    {
+        let commitment = hash_note(note);
+        assert!(
+            verify_merkle_inclusion(commitment, leaf_index, siblings, witness.merkle_root),
+            "Merkle inclusion proof failed for input at index {}",
+            leaf_index
+        );
+    }
+
+    // --- Constraint 5: compute nullifiers (proves spending key knowledge) ---
     let mut nullifiers = Vec::with_capacity(witness.inputs.len());
     for (note, sk) in witness.inputs.iter().zip(witness.spending_keys.iter()) {
         let commitment = hash_note(note);
@@ -82,7 +138,7 @@ pub fn main() {
         nullifiers.push(nullifier);
     }
 
-    // --- Constraint 5: compute output commitments ---
+    // --- Constraint 6: compute output commitments ---
     let mut output_commitments = Vec::with_capacity(witness.outputs.len());
     for note in &witness.outputs {
         assert!(note.amount > 0, "output amount must be non-zero");

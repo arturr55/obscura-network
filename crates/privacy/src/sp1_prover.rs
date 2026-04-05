@@ -46,18 +46,32 @@ fn client() -> EnvProver {
 }
 
 /// Generate a transfer proof using SP1.
+///
+/// `leaf_indices[i]` is the position of `input_notes[i]` in the commitment tree.
+/// `merkle_paths[i]` contains the sibling hashes (TREE_DEPTH elements) for input i.
+/// These are obtained by calling `crate::merkle::build_proof_paths` on all commitments.
 pub fn prove_transfer(
     spending_keys: Vec<[u8; 32]>,
     input_notes: &[Note],
     output_notes: &[Note],
     merkle_root: [u8; 32],
+    leaf_indices: Vec<u64>,
+    merkle_paths: Vec<Vec<[u8; 32]>>,
 ) -> Result<Vec<u8>> {
+    if leaf_indices.len() != input_notes.len() {
+        bail!("leaf_indices length must match input_notes length");
+    }
+    if merkle_paths.len() != input_notes.len() {
+        bail!("merkle_paths length must match input_notes length");
+    }
     let prover = client();
     let witness = TransferWitness {
         spending_keys,
         inputs: input_notes.iter().map(note_to_data).collect(),
         outputs: output_notes.iter().map(note_to_data).collect(),
         merkle_root,
+        leaf_indices,
+        merkle_paths,
     };
     let mut stdin = SP1Stdin::new();
     stdin.write(&witness);

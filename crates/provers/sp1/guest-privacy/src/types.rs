@@ -15,6 +15,12 @@ pub struct TransferWitness {
     pub outputs: Vec<NoteData>,
     /// Merkle root at time of proof (public, verified on-chain)
     pub merkle_root: [u8; 32],
+    /// Leaf index of each input note in the commitment tree.
+    /// `leaf_indices[i]` is the position of `inputs[i]`'s commitment.
+    pub leaf_indices: Vec<u64>,
+    /// Merkle sibling paths proving each input note is in `merkle_root`.
+    /// `merkle_paths[i]` has TREE_DEPTH elements (leaf→root siblings).
+    pub merkle_paths: Vec<Vec<[u8; 32]>>,
 }
 
 /// Private witness for unshield proof.
