@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useAccount, useWalletClient } from "wagmi";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import Link from "next/link";
@@ -12,13 +12,41 @@ const DEFAULT_ASSET_ID = "000000000000000000000000000000000000000000000000000000
 // Mock proof magic header (OBSv in bytes)
 const MOCK_PROOF_HEX = "4f425376" + "0".repeat(56); // OBSv + padding
 
+const ORACLE_PROXY = "/api/sanctions";
+
 type TxType = "shield" | "transfer" | "unshield";
+
+type SanctionsStatus = "idle" | "checking" | "clean" | "sanctioned" | "error";
+
+interface SanctionsState {
+  status: SanctionsStatus;
+  msg?: string;
+  // raw witness bytes to include in TX (null until fetched)
+  sanctionsRoot: number[] | null;
+  proofTimestamp: number;
+}
 
 interface SavedNote {
   commitment: string;
   nullifier: string;
   amount: string;
   asset_id: string;
+}
+
+function SanctionsBadge({ state }: { state: SanctionsState }) {
+  if (state.status === "idle") return null;
+  const cfg = {
+    checking: { cls: "border-gray-600 bg-gray-900/30 text-gray-400", icon: "⏳", text: "Checking OFAC sanctions list..." },
+    clean:     { cls: "border-green-700/50 bg-green-900/20 text-green-300", icon: "✓", text: "Recipient is not on OFAC sanctions list" },
+    sanctioned:{ cls: "border-red-700/50 bg-red-900/30 text-red-300", icon: "⛔", text: "BLOCKED: Recipient is on OFAC SDN sanctions list" },
+    error:     { cls: "border-yellow-700/40 bg-yellow-900/20 text-yellow-300", icon: "⚠", text: state.msg ?? "Sanctions check unavailable" },
+  }[state.status];
+  return (
+    <div className={`border rounded-lg px-3 py-2 text-xs flex items-center gap-2 mb-3 ${cfg.cls}`}>
+      <span>{cfg.icon}</span>
+      <span>{cfg.text}</span>
+    </div>
+  );
 }
 
 function StatusMsg({ type, msg }: { type: "success" | "error" | "info"; msg: string }) {
@@ -56,6 +84,49 @@ export default function SendPage() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<{ type: "success" | "error" | "info"; msg: string } | null>(null);
   const [savedNote, setSavedNote] = useState<string | null>(null);
+  const [sanctions, setSanctions] = useState<SanctionsState>({
+    status: "idle", sanctionsRoot: null, proofTimestamp: 0,
+  });
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Auto-check recipient address against OFAC oracle (debounced 600ms)
+  useEffect(() => {
+    if (txType !== "transfer") return;
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+
+    const addr = recipient.trim();
+    if (!addr.match(/^0x[0-9a-fA-F]{40}$/)) {
+      setSanctions({ status: "idle", sanctionsRoot: null, proofTimestamp: 0 });
+      return;
+    }
+
+    setSanctions({ status: "checking", sanctionsRoot: null, proofTimestamp: 0 });
+    debounceRef.current = setTimeout(async () => {
+      try {
+        // First: quick check
+        const checkRes = await fetch(`${ORACLE_PROXY}?action=check&addr=${addr}`);
+        const checkData = await checkRes.json();
+        if (checkData.sanctioned) {
+          setSanctions({ status: "sanctioned", sanctionsRoot: null, proofTimestamp: 0 });
+          return;
+        }
+        // Then: fetch witness (for TX payload)
+        const witRes = await fetch(`${ORACLE_PROXY}?action=witness&addr=${addr}`);
+        const witData = await witRes.json();
+        if (witData.error) {
+          setSanctions({ status: "error", msg: witData.error, sanctionsRoot: null, proofTimestamp: 0 });
+          return;
+        }
+        setSanctions({
+          status: "clean",
+          sanctionsRoot: witData.sanctions_root ?? null,
+          proofTimestamp: Math.floor(Date.now() / 1000),
+        });
+      } catch {
+        setSanctions({ status: "error", msg: "Oracle unreachable — proceeding without check", sanctionsRoot: null, proofTimestamp: 0 });
+      }
+    }, 600);
+  }, [recipient, txType]);
 
   const { data: canSubmit } = useReadContract({
     address: CONTRACTS.billing,
@@ -146,6 +217,12 @@ export default function SendPage() {
       return;
     }
 
+    // Block if address is sanctioned
+    if (sanctions.status === "sanctioned") {
+      setStatus({ type: "error", msg: "⛔ Cannot transfer: recipient is on the OFAC SDN sanctions list." });
+      return;
+    }
+
     setLoading(true);
     setStatus({ type: "info", msg: "Building ZK proof (mock)..." });
 
@@ -155,6 +232,11 @@ export default function SendPage() {
       const amountRaw = Math.floor(Number(amount) * 1e9);
       const outputCommitment = "0x" + randomHex(32);
       const mockRoot = Array(32).fill(0);
+
+      // Sanctions public inputs — use oracle root if available, else zeros
+      const sanctionsRoot = sanctions.sanctionsRoot ?? Array(32).fill(0);
+      const recipientCommitment = Array(32).fill(0); // mock: circuit computes this
+      const proofTimestamp = sanctions.proofTimestamp || Math.floor(Date.now() / 1000);
 
       const callMsg = {
         obscura_privacy: {
@@ -167,6 +249,13 @@ export default function SendPage() {
             },
             nullifiers: [parsedNote.nullifier],
             output_commitments: [outputCommitment],
+            // ZK sanctions non-membership proof (mock for testnet)
+            sanctions_proof: hexToBytes(MOCK_PROOF_HEX),
+            sanctions_public_inputs: {
+              recipient_commitment: recipientCommitment,
+              sanctions_root: sanctionsRoot,
+              proof_timestamp: proofTimestamp,
+            },
           },
         },
       };
@@ -311,7 +400,7 @@ export default function SendPage() {
         {(["shield", "transfer", "unshield"] as TxType[]).map((t) => (
           <button
             key={t}
-            onClick={() => { setTxType(t); setStatus(null); setSavedNote(null); }}
+            onClick={() => { setTxType(t); setStatus(null); setSavedNote(null); setSanctions({ status: "idle", sanctionsRoot: null, proofTimestamp: 0 }); }}
             className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
               txType === t
                 ? "bg-purple-600 text-white"
@@ -368,8 +457,9 @@ export default function SendPage() {
               value={recipient}
               onChange={(e) => setRecipient(e.target.value)}
               placeholder="0x..."
-              className="w-full bg-obscura-dark border border-obscura-border rounded-lg px-4 py-3 text-white placeholder-gray-600 text-sm mb-3 focus:outline-none focus:border-purple-600"
+              className="w-full bg-obscura-dark border border-obscura-border rounded-lg px-4 py-3 text-white placeholder-gray-600 text-sm mb-2 focus:outline-none focus:border-purple-600"
             />
+            <SanctionsBadge state={sanctions} />
 
             <label className="block text-gray-400 text-xs mb-1.5">Amount to transfer</label>
             <input
