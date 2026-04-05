@@ -8,6 +8,7 @@ members = [
   "crates/stf/stf-declaration",
   "crates/utils/node-discovery",
   "crates/privacy",
+  "crates/sanctions-oracle",
   "examples/value-setter",
   "scripts/acceptance-test",
   "scripts/soak-test",

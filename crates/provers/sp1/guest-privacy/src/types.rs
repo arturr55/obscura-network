@@ -84,3 +84,49 @@ pub struct CompliancePublicOutputs {
     /// Number of transactions counted
     pub tx_count: u32,
 }
+
+/// Private witness for sanctions non-membership proof.
+///
+/// Proves that `recipient` is NOT in the OFAC SDN sanctions list,
+/// using a Sorted Merkle Tree non-membership proof:
+/// - All sanctioned addresses are hashed and sorted as tree leaves
+/// - Non-membership is proved by showing two adjacent leaves L < hash(R) < Right
+/// - Both adjacent leaves are valid members of the tree
+/// - Therefore hash(R) cannot exist between them
+#[derive(Serialize, Deserialize, Clone)]
+pub struct SanctionsWitness {
+    /// Address being checked (private — never revealed)
+    pub recipient: [u8; 32],
+    /// OFAC SDN Merkle root (public — updated daily by oracle)
+    pub sanctions_root: [u8; 32],
+    /// Left adjacent leaf: sorted hash of a sanctioned address, left neighbour
+    pub left_leaf: [u8; 32],
+    /// Right adjacent leaf: sorted hash of a sanctioned address, right neighbour
+    pub right_leaf: [u8; 32],
+    /// Merkle proof path for left_leaf (sibling hashes, leaf→root)
+    pub left_proof: Vec<[u8; 32]>,
+    /// Merkle proof path for right_leaf (sibling hashes, leaf→root)
+    pub right_proof: Vec<[u8; 32]>,
+    /// Position (index) of left_leaf in the sorted tree
+    pub left_index: u64,
+    /// Position (index) of right_leaf in the sorted tree
+    pub right_index: u64,
+    /// Depth of the Merkle tree (proof length)
+    pub tree_depth: u32,
+    /// Unix timestamp of proof generation (informational, not verified)
+    pub proof_timestamp: u64,
+}
+
+/// Public outputs committed by the sanctions non-membership proof.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct SanctionsPublicOutputs {
+    /// SHA256("recipient" || recipient) — proves the same address was checked
+    /// without revealing it. Auditor can verify by hashing the address themselves.
+    pub recipient_commitment: [u8; 32],
+    /// OFAC Merkle root used in this proof
+    pub sanctions_root: [u8; 32],
+    /// True if recipient is clean (not sanctioned) — always true if proof is valid
+    pub is_clean: bool,
+    /// Unix timestamp when proof was generated
+    pub proof_timestamp: u64,
+}

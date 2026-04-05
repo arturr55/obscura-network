@@ -297,6 +297,21 @@ pub struct UnshieldPublicInputs {
     pub asset_id: AssetId,
 }
 
+/// Public inputs for sanctions non-membership proof verification.
+/// These values are committed inside the ZK proof and must match
+/// what the verifier expects.
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, UniversalWallet)]
+#[serialize(Borsh, Serde)]
+pub struct SanctionsPublicInputs {
+    /// SHA256("recipient" || recipient_address) — auditor can verify
+    /// by hashing the known recipient address
+    pub recipient_commitment: [u8; 32],
+    /// OFAC Merkle root at time of proof generation
+    pub sanctions_root: [u8; 32],
+    /// Timestamp of when the proof was generated
+    pub proof_timestamp: u64,
+}
+
 // ── Events ────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq, JsonSchema)]

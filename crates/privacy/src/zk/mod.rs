@@ -33,6 +33,7 @@ use anyhow::{bail, Result};
 
 use crate::TransferPublicInputs;
 use crate::UnshieldPublicInputs;
+use crate::SanctionsPublicInputs;
 
 // ── SP1 Verification Keys (embedded at build time) ─────────────────────────
 
@@ -47,6 +48,8 @@ mod sp1_vkeys {
         "0x001f5c8123eb2c9b803e50ef3379697e5ccf2153dab59630b893b04c10bb238a";
     pub const COMPLIANCE_VK_HASH: &str =
         "0x000c5445db13b261f2720e19548e69db3b29606271e84c2aeca569bb1604a74d";
+    // Run `cargo run -p obscura-privacy --bin gen_vkeys --features sp1` after building sanctions ELF
+    pub const SANCTIONS_VK_HASH: &str = "0x0000000000000000000000000000000000000000000000000000000000000000";
 }
 
 // ── Verify transfer proof ──────────────────────────────────────────────────
@@ -101,6 +104,45 @@ pub fn verify_unshield_proof(proof: &[u8], _public_inputs: &UnshieldPublicInputs
             &GROTH16_VK_BYTES,
         )
         .map_err(|e| anyhow::anyhow!("Unshield proof verification failed: {e}"))?;
+        return Ok(());
+    }
+
+    #[cfg(not(feature = "sp1"))]
+    {
+        if proof.len() < 4 || &proof[0..4] != b"OBSv" {
+            bail!("Invalid proof format: missing OBSCURA proof header");
+        }
+        Ok(())
+    }
+}
+
+// ── Verify sanctions proof ────────────────────────────────────────────────
+
+/// Verify a ZK sanctions non-membership proof.
+///
+/// Confirms that the recipient address is NOT on the OFAC SDN list,
+/// without revealing the recipient's address.
+///
+/// Phase 1 (default): Mock verifier — accepts any `OBSv`-prefixed proof.
+/// Phase 2 (`sp1` feature): SP1 Groth16 verification.
+pub fn verify_sanctions_proof(
+    proof: &[u8],
+    _public_inputs: &SanctionsPublicInputs,
+) -> Result<()> {
+    if proof.is_empty() {
+        bail!("Sanctions proof cannot be empty");
+    }
+
+    #[cfg(feature = "sp1")]
+    {
+        use sp1_verifier::{Groth16Verifier, GROTH16_VK_BYTES};
+        Groth16Verifier::verify(
+            proof,
+            &[],
+            sp1_vkeys::SANCTIONS_VK_HASH,
+            &GROTH16_VK_BYTES,
+        )
+        .map_err(|e| anyhow::anyhow!("Sanctions proof verification failed: {e}"))?;
         return Ok(());
     }
 

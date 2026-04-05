@@ -16,13 +16,16 @@ const UNSHIELD_ELF: &[u8] = include_bytes!(
 const COMPLIANCE_ELF: &[u8] = include_bytes!(
     "../../provers/sp1/guest-privacy/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/compliance"
 );
+const SANCTIONS_ELF: &[u8] = include_bytes!(
+    "../../provers/sp1/guest-privacy/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/sanctions"
+);
 
 use crate::types::Note;
 
 mod guest_types {
     include!("../../provers/sp1/guest-privacy/src/types.rs");
 }
-pub use guest_types::{ComplianceWitness, NoteData, TransferWitness, UnshieldWitness};
+pub use guest_types::{ComplianceWitness, NoteData, SanctionsWitness, TransferWitness, UnshieldWitness};
 
 fn note_to_data(note: &Note) -> NoteData {
     let mut asset_id = [0u8; 32];
@@ -85,5 +88,21 @@ pub fn prove_compliance(amounts: Vec<u64>, regulatory_limit: u64) -> Result<Vec<
     stdin.write(&witness);
     let pk = prover.setup(Elf::Static(COMPLIANCE_ELF)).context("setup compliance")?;
     let proof = prover.prove(&pk, stdin).groth16().run().context("prove compliance")?;
+    Ok(proof.bytes())
+}
+
+/// Generate a ZK sanctions non-membership proof using SP1.
+///
+/// Proves that `recipient` is NOT on the OFAC SDN list identified by
+/// `sanctions_root`, without revealing the recipient's address.
+///
+/// The `witness` should be obtained from the sanctions oracle:
+/// `sanctions-oracle witness --address 0x...`
+pub fn prove_sanctions(witness: SanctionsWitness) -> Result<Vec<u8>> {
+    let prover = client();
+    let mut stdin = SP1Stdin::new();
+    stdin.write(&witness);
+    let pk = prover.setup(Elf::Static(SANCTIONS_ELF)).context("setup sanctions")?;
+    let proof = prover.prove(&pk, stdin).groth16().run().context("prove sanctions")?;
     Ok(proof.bytes())
 }
