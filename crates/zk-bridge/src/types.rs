@@ -6,6 +6,9 @@
 use schemars::JsonSchema;
 use sov_modules_api::macros::{serialize, UniversalWallet};
 
+// Helios types are in helios_types.rs — imported here for BridgeConfig
+use crate::helios_types::HeliosConfig;
+
 /// Public outputs committed by the SP1 bridge circuit.
 /// Submitted by the relayer together with the ZK proof.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSchema, UniversalWallet)]
@@ -88,6 +91,11 @@ pub struct BridgeConfig {
 
     /// Admin address that can update the config
     pub admin: Vec<u8>,
+
+    /// Helios light client configuration.
+    /// Set initial_trusted_beacon_root to a known finalized beacon root at genesis.
+    /// If initial_trusted_slot == 0, Helios checks are skipped (testnet/Phase 1 mode).
+    pub helios: HeliosConfig,
 }
 
 impl Default for BridgeConfig {
@@ -97,6 +105,7 @@ impl Default for BridgeConfig {
             vk_hash: [0u8; 32],
             max_proof_age_secs: 7 * 24 * 3600, // 7 days
             admin: vec![],
+            helios: HeliosConfig::default(), // trusted_slot=0 → Helios checks disabled
         }
     }
 }

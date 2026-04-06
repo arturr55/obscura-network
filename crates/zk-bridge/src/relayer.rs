@@ -33,6 +33,8 @@ use tracing::{info, warn};
 
 use crate::types::{BridgePublicInputs, ClaimDeposit};
 use crate::verifier::MOCK_PROOF_PREFIX;
+use crate::helios_types::{HeliosPublicInputs, UpdateHeliosHead};
+use crate::helios::MOCK_HELIOS_PREFIX;
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -104,6 +106,10 @@ impl BridgeRelayer {
     }
 
     /// Run the relayer event loop.
+    ///
+    /// Each iteration:
+    ///   1. Submit a Helios proof for the latest finalized beacon block (if new deposits exist)
+    ///   2. Scan Ethereum for DepositLocked events and relay them to Obscura
     pub async fn run(&mut self) -> Result<()> {
         info!(
             "Bridge relayer started: contract={}, mock_proofs={}",
@@ -112,9 +118,10 @@ impl BridgeRelayer {
         );
 
         let mut from_block = self.config.start_block;
+        let mut last_helios_block: u64 = 0;
 
         loop {
-            match self.scan_and_relay(from_block).await {
+            match self.scan_and_relay(from_block, &mut last_helios_block).await {
                 Ok(last_block) => {
                     from_block = last_block.saturating_add(1);
                 }
@@ -130,7 +137,7 @@ impl BridgeRelayer {
         }
     }
 
-    async fn scan_and_relay(&mut self, from_block: u64) -> Result<u64> {
+    async fn scan_and_relay(&mut self, from_block: u64, last_helios_block: &mut u64) -> Result<u64> {
         // Get latest finalized block
         let latest = self.eth_client.get_latest_block().await?;
         if from_block > latest {
@@ -142,6 +149,22 @@ impl BridgeRelayer {
             .eth_client
             .get_deposit_events(from_block, latest)
             .await?;
+
+        // If there are new deposits, submit a Helios proof first so
+        // the rollup can verify them trustlessly.
+        if !logs.is_empty() && latest != *last_helios_block {
+            match self.submit_helios_update(latest).await {
+                Ok(_) => {
+                    info!("Helios: updated trusted beacon root for block {}", latest);
+                    *last_helios_block = latest;
+                }
+                Err(e) => {
+                    warn!("Helios update failed (deposits may be delayed): {e}");
+                    // Don't bail — deposits still work in Phase 1 (trusted mode)
+                    // once Helios is fully activated, this would block deposits
+                }
+            }
+        }
 
         for log in logs {
             if self.processed.contains(&log.deposit_id) {
@@ -166,6 +189,89 @@ impl BridgeRelayer {
         }
 
         Ok(latest)
+    }
+
+    /// Submit a Helios head update to the Obscura rollup.
+    ///
+    /// In mock mode: creates a mock Helios proof for the given ETH block.
+    /// In real mode: generates and submits a real SP1 Helios proof.
+    async fn submit_helios_update(&self, eth_block_number: u64) -> Result<()> {
+        // Fetch the beacon block root for this ETH block (via EIP-4788)
+        let beacon_root = self
+            .eth_client
+            .get_beacon_root(eth_block_number)
+            .await?;
+
+        // Fetch the ETH block hash
+        let block = self
+            .eth_client
+            .eth_call(
+                "eth_getBlockByNumber",
+                serde_json::json!([format!("0x{:x}", eth_block_number), false]),
+            )
+            .await?;
+        let eth_block_hash_hex = block["hash"].as_str().unwrap_or("0x00");
+        let eth_block_hash = hex_decode(eth_block_hash_hex)?;
+        if eth_block_hash.len() != 32 {
+            anyhow::bail!("Helios: invalid eth_block_hash length");
+        }
+        let mut eth_block_hash_arr = [0u8; 32];
+        eth_block_hash_arr.copy_from_slice(&eth_block_hash);
+
+        // Query the rollup for its current trusted beacon root and slot
+        let (current_trusted_root, current_slot) = self
+            .obscura_client
+            .get_helios_state()
+            .await
+            .unwrap_or(([0u8; 32], 0));
+
+        // New slot: use eth_block_number as a proxy for slot (real: fetch from beacon API)
+        // In production, fetch the actual beacon slot from the CL API.
+        let new_slot = eth_block_number; // simplified for Phase 1
+
+        if new_slot <= current_slot {
+            // Already up to date
+            return Ok(());
+        }
+
+        // Build public inputs
+        let public_inputs = HeliosPublicInputs {
+            prev_trusted_root: current_trusted_root,
+            new_beacon_root: beacon_root,
+            new_slot,
+            execution_block_hash: eth_block_hash_arr,
+        };
+
+        // Generate Helios proof (mock or real)
+        let proof = if self.config.mock_proofs {
+            // Mock: "OBShelios" + slot as 8 bytes LE
+            let mut p = MOCK_HELIOS_PREFIX.to_vec();
+            p.extend_from_slice(&new_slot.to_le_bytes());
+            p
+        } else {
+            self.generate_helios_sp1_proof(&public_inputs).await?
+        };
+
+        // Submit to Obscura rollup
+        let update = UpdateHeliosHead { proof, public_inputs };
+        self.obscura_client.submit_helios_update(update).await?;
+
+        Ok(())
+    }
+
+    #[allow(unused_variables)]
+    async fn generate_helios_sp1_proof(&self, inputs: &HeliosPublicInputs) -> Result<Vec<u8>> {
+        // Phase 2: Generate real SP1 Helios proof.
+        //
+        // Steps:
+        //   1. Fetch full beacon LightClientUpdate from Beacon API
+        //      (attested_header, finalized_header, finality_branch, sync_aggregate)
+        //   2. Build HeliosWitness struct
+        //   3. Call sp1_sdk::ProverClient::prove(HELIOS_ELF, witness)
+        //   4. Return Groth16 proof bytes
+        anyhow::bail!(
+            "Real SP1 Helios proof generation not yet implemented. Use --mock-proofs for testnet."
+        )
     }
 
     async fn relay_deposit(&self, log: &EthLog) -> Result<()> {
@@ -409,7 +515,7 @@ impl EthClient {
         hex_to_bytes32(root_hex)
     }
 
-    async fn eth_call(
+    pub async fn eth_call(
         &self,
         method: &str,
         params: serde_json::Value,
@@ -451,6 +557,71 @@ impl ObscuraClient {
         Ok(Self {
             rpc_url: rpc_url.to_string(),
         })
+    }
+
+    /// Query the current Helios state (trusted_beacon_root, trusted_slot) from the rollup.
+    pub async fn get_helios_state(&self) -> Result<([u8; 32], u64)> {
+        let payload = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "obscura_getHeliosState",
+            "params": []
+        });
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(&self.rpc_url)
+            .json(&payload)
+            .send()
+            .await
+            .context("Obscura RPC: get_helios_state request failed")?
+            .json::<serde_json::Value>()
+            .await
+            .context("Obscura RPC: get_helios_state parse failed")?;
+
+        if let Some(err) = resp.get("error") {
+            anyhow::bail!("Obscura RPC error (helios state): {}", err);
+        }
+
+        let result = &resp["result"];
+        let root_hex = result["trusted_beacon_root"].as_str().unwrap_or("0x");
+        let slot = result["trusted_slot"].as_u64().unwrap_or(0);
+
+        let root_bytes = hex_decode(root_hex).unwrap_or_default();
+        let mut root = [0u8; 32];
+        if root_bytes.len() == 32 {
+            root.copy_from_slice(&root_bytes);
+        }
+
+        Ok((root, slot))
+    }
+
+    /// Submit an UpdateHeliosHead call to the Obscura rollup.
+    pub async fn submit_helios_update(&self, update: UpdateHeliosHead) -> Result<()> {
+        let payload = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "obscura_submitHeliosUpdate",
+            "params": [update]
+        });
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(&self.rpc_url)
+            .json(&payload)
+            .send()
+            .await
+            .context("Obscura RPC: submit_helios_update request failed")?
+            .json::<serde_json::Value>()
+            .await
+            .context("Obscura RPC: submit_helios_update parse failed")?;
+
+        if let Some(err) = resp.get("error") {
+            anyhow::bail!("Obscura RPC error (helios update): {}", err);
+        }
+
+        info!("Helios update submitted: {:?}", resp["result"]);
+        Ok(())
     }
 
     /// Submit a ClaimDeposit call to the Obscura rollup.

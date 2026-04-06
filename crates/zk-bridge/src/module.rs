@@ -17,6 +17,8 @@ use sov_rollup_interface::da::DaSpec;
 use std::marker::PhantomData;
 
 use crate::types::{BridgeConfig, ClaimDeposit, WithdrawBridge, WithdrawalRecord};
+use crate::helios_types::{HeliosConfig, UpdateHeliosHead};
+use crate::helios::verify_helios_proof;
 use obscura_privacy::{ObscuraPrivacy, types::{AssetId, Commitment}};
 
 #[allow(dead_code)] // will be used when UpdateConfig is added
@@ -62,6 +64,32 @@ pub struct ObscuraBridge<S: Spec> {
     #[state]
     pub total_withdrawn_usdc: StateValue<u64>,
 
+    // ── Helios trustless beacon state ─────────────────────────────────────────
+
+    /// Helios module configuration (initial trusted root, max slot gap).
+    #[state]
+    pub helios_config: StateValue<HeliosConfig>,
+
+    /// Current trusted finalized Ethereum beacon root (updated by Helios proofs).
+    /// Bridge deposits require their eth_block_hash to appear in `finalized_eth_blocks`.
+    #[state]
+    pub trusted_beacon_root: StateValue<[u8; 32]>,
+
+    /// Slot number of the current trusted beacon root.
+    /// New Helios proofs must advance this strictly forward.
+    #[state]
+    pub trusted_slot: StateValue<u64>,
+
+    /// Set of ETH execution block hashes proven finalized via Helios.
+    /// Key: hex-encoded block hash. Value: the slot it was proven at.
+    /// The bridge checks this set before accepting a ClaimDeposit.
+    #[state]
+    pub finalized_eth_blocks: StateMap<String, u64>,
+
+    /// Number of Helios head updates processed.
+    #[state]
+    pub helios_update_count: StateValue<u64>,
+
     /// Reference to the privacy module — used to auto-shield deposits into the shielded pool.
     #[module]
     pub obscura_privacy: ObscuraPrivacy<S>,
@@ -82,6 +110,10 @@ pub enum BridgeCallMessage {
     /// Request withdrawal: burn bridged-USDC on Obscura, unlock USDC on Ethereum.
     /// Submitted by the user via the dApp.
     WithdrawBridge(WithdrawBridge),
+    /// Advance the trusted Ethereum beacon root via a Helios ZK proof.
+    /// Submitted by the relayer periodically (every epoch or when a new deposit arrives).
+    /// After this, the proven execution_block_hash is added to `finalized_eth_blocks`.
+    UpdateHeliosHead(UpdateHeliosHead),
 }
 
 // ── Events ────────────────────────────────────────────────────────────────────
@@ -107,6 +139,13 @@ pub enum BridgeEvent {
     },
     /// Emitted when bridge config is updated.
     ConfigUpdated,
+    /// Emitted when the Helios trusted beacon root is advanced.
+    HeliosHeadUpdated {
+        prev_beacon_root: [u8; 32],
+        new_beacon_root: [u8; 32],
+        new_slot: u64,
+        execution_block_hash: [u8; 32],
+    },
 }
 
 // ── Module Implementation ─────────────────────────────────────────────────────
@@ -129,9 +168,18 @@ impl<S: Spec> Module for ObscuraBridge<S> {
         self.total_claims.set(&0u64, state)?;
         self.next_withdrawal_id.set(&0u64, state)?;
         self.total_withdrawn_usdc.set(&0u64, state)?;
+        self.helios_update_count.set(&0u64, state)?;
+
+        // Initialize Helios state from genesis config
+        let helios_cfg = config.helios.clone();
+        self.trusted_beacon_root.set(&helios_cfg.initial_trusted_beacon_root, state)?;
+        self.trusted_slot.set(&helios_cfg.initial_trusted_slot, state)?;
+        self.helios_config.set(&helios_cfg, state)?;
+
         tracing::info!(
-            "ObscuraBridge genesis: contract={}",
-            config.bridge_contract_address
+            "ObscuraBridge genesis: contract={}, trusted_beacon_root=0x{}",
+            config.bridge_contract_address,
+            hex::encode(config.helios.initial_trusted_beacon_root)
         );
         Ok(())
     }
@@ -148,6 +196,9 @@ impl<S: Spec> Module for ObscuraBridge<S> {
             }
             BridgeCallMessage::WithdrawBridge(withdraw) => {
                 self.handle_withdraw_bridge(withdraw, context, state)
+            }
+            BridgeCallMessage::UpdateHeliosHead(update) => {
+                self.handle_update_helios_head(update, context, state)
             }
         }
     }
@@ -190,6 +241,22 @@ impl<S: Spec> ObscuraBridge<S> {
                 "Bridge: deposit {} already claimed",
                 inputs.deposit_id
             );
+        }
+
+        // ── 3b. Trustless check: verify ETH block is Helios-proven ────────
+        // If Helios is active (trusted_slot > 0), the eth_block_hash must have
+        // been proven finalized by a Helios proof. This replaces trust in the relayer.
+        let trusted_slot = self.trusted_slot.get(state)?.unwrap_or(0);
+        if trusted_slot > 0 {
+            let block_key = format!("0x{}", hex::encode(inputs.eth_block_hash));
+            let proven_slot = self.finalized_eth_blocks.get(&block_key, state)?.unwrap_or(0);
+            if proven_slot == 0 {
+                bail!(
+                    "Bridge: eth_block_hash 0x{} not proven finalized by Helios. \
+                     Submit UpdateHeliosHead first.",
+                    hex::encode(inputs.eth_block_hash)
+                );
+            }
         }
 
         // ── 4. Verify ZK proof ─────────────────────────────────────────────
@@ -303,6 +370,88 @@ impl<S: Spec> ObscuraBridge<S> {
                 deposit_id: msg.deposit_id,
                 eth_recipient: msg.eth_recipient,
                 amount,
+            },
+        );
+
+        Ok(())
+    }
+
+    fn handle_update_helios_head(
+        &mut self,
+        update: UpdateHeliosHead,
+        _context: &Context<S>,
+        state: &mut impl TxState<S>,
+    ) -> Result<()> {
+        let inputs = &update.public_inputs;
+
+        // ── 1. Check chain link ────────────────────────────────────────────
+        // The proof's prev_trusted_root must match our current trusted root.
+        let current_root = self.trusted_beacon_root.get(state)?.unwrap_or([0u8; 32]);
+        if inputs.prev_trusted_root != current_root {
+            bail!(
+                "Helios: prev_trusted_root mismatch — expected 0x{}, got 0x{}. \
+                 Helios updates must be submitted in order.",
+                hex::encode(current_root),
+                hex::encode(inputs.prev_trusted_root)
+            );
+        }
+
+        // ── 2. Verify slot is strictly advancing ──────────────────────────
+        let current_slot = self.trusted_slot.get(state)?.unwrap_or(0);
+        if inputs.new_slot <= current_slot {
+            bail!(
+                "Helios: new_slot ({}) must be > current trusted_slot ({})",
+                inputs.new_slot,
+                current_slot
+            );
+        }
+
+        // ── 3. Check slot gap against config limit ────────────────────────
+        let helios_cfg = self.helios_config.get(state)?.unwrap_or_default();
+        if current_slot > 0 {
+            let gap = inputs.new_slot.saturating_sub(current_slot);
+            if gap > helios_cfg.max_slot_gap {
+                bail!(
+                    "Helios: slot gap {} exceeds max_slot_gap {}. \
+                     Submit intermediate updates first.",
+                    gap,
+                    helios_cfg.max_slot_gap
+                );
+            }
+        }
+
+        // ── 4. Verify Helios ZK proof ──────────────────────────────────────
+        verify_helios_proof(&update.proof, inputs)
+            .map_err(|e| anyhow::anyhow!("Helios: proof verification failed: {e}"))?;
+
+        // ── 5. Update trusted state ────────────────────────────────────────
+        self.trusted_beacon_root.set(&inputs.new_beacon_root, state)?;
+        self.trusted_slot.set(&inputs.new_slot, state)?;
+
+        // ── 6. Mark execution block as finalized ───────────────────────────
+        // This is the key: now ClaimDeposit can reference this block hash.
+        let block_key = format!("0x{}", hex::encode(inputs.execution_block_hash));
+        self.finalized_eth_blocks.set(&block_key, &inputs.new_slot, state)?;
+
+        // ── 7. Update counter ──────────────────────────────────────────────
+        let count = self.helios_update_count.get(state)?.unwrap_or(0);
+        self.helios_update_count.set(&(count + 1), state)?;
+
+        tracing::info!(
+            "Helios: beacon root advanced → slot={}, new_root=0x{}, eth_block=0x{}",
+            inputs.new_slot,
+            hex::encode(inputs.new_beacon_root),
+            hex::encode(inputs.execution_block_hash)
+        );
+
+        // ── 8. Emit event ──────────────────────────────────────────────────
+        self.emit_event(
+            state,
+            BridgeEvent::HeliosHeadUpdated {
+                prev_beacon_root: inputs.prev_trusted_root,
+                new_beacon_root: inputs.new_beacon_root,
+                new_slot: inputs.new_slot,
+                execution_block_hash: inputs.execution_block_hash,
             },
         );
 

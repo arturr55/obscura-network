@@ -65,6 +65,8 @@
 pub mod module;
 pub mod types;
 pub mod verifier;
+pub mod helios;
+pub mod helios_types;
 
 #[cfg(feature = "relayer")]
 pub mod relayer;
