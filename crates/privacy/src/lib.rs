@@ -33,6 +33,8 @@ use std::marker::PhantomData;
 pub mod merkle;
 pub mod types;
 pub mod zk;
+pub mod keys;
+pub mod encryption;
 
 /// SP1 proof generation (Phase 2, requires `sp1` feature).
 /// Use prove_transfer(), prove_unshield(), prove_compliance() to generate real ZK proofs.
@@ -111,6 +113,17 @@ pub struct ObscuraPrivacy<S: Spec> {
     /// Address of the sanctions oracle (the only account allowed to update the root).
     #[state]
     pub sanctions_oracle: StateValue<Vec<u8>>,
+
+    // ── Encrypted notes storage (viewing keys) ────────────────────────────────
+
+    /// Encrypted note blobs stored alongside commitments.
+    /// Key: hex(commitment_hash) — same index as the commitment.
+    /// Value: serialized EncryptedNote (enc_for_recipient + enc_for_compliance).
+    ///
+    /// Anyone can query this map to try to decrypt notes using their viewing key.
+    /// The compliance oracle can decrypt ALL entries using COMPLIANCE_ORACLE_PUBKEY.
+    #[state]
+    pub encrypted_notes: StateMap<String, Vec<u8>>,
 
     #[phantom]
     pub phantom: PhantomData<S>,
@@ -254,6 +267,12 @@ impl<S: Spec> ObscuraPrivacy<S> {
         // Insert into the Incremental Merkle Tree and update the root
         self.insert_commitment(&commitment, state)?;
 
+        // Store encrypted note if provided (viewing key support)
+        if !msg.encrypted_note.is_empty() {
+            let key = format!("0x{}", hex::encode(commitment.0));
+            self.encrypted_notes.set(&key, &msg.encrypted_note, state)?;
+        }
+
         // Update shielded supply
         let asset_id = msg.note.asset_id.clone();
         let current_supply = self
@@ -349,10 +368,18 @@ impl<S: Spec> ObscuraPrivacy<S> {
             self.nullifiers.set(nullifier, &true, state)?;
         }
 
-        // Add output commitments to the tree
-        for commitment in &msg.output_commitments {
+        // Add output commitments to the tree + store encrypted notes
+        for (i, commitment) in msg.output_commitments.iter().enumerate() {
             self.commitments.push(commitment, state)?;
             self.insert_commitment(commitment, state)?;
+
+            // Store encrypted note if provided for this output (viewing key support)
+            if let Some(enc_bytes) = msg.encrypted_outputs.get(i) {
+                if !enc_bytes.is_empty() {
+                    let key = format!("0x{}", hex::encode(commitment.0));
+                    self.encrypted_notes.set(&key, enc_bytes, state)?;
+                }
+            }
         }
 
         // Update compliance counters
@@ -466,6 +493,12 @@ pub enum CallMessage {
 pub struct ShieldMessage {
     /// The note to shield (amount + asset_id + owner_pubkey + salt)
     pub note: Note,
+    /// Encrypted note for viewing key support.
+    /// Must contain two encryptions:
+    ///   - enc_for_recipient: with the user's viewing_public_key
+    ///   - enc_for_compliance: with COMPLIANCE_ORACLE_PUBKEY (mandatory)
+    /// Pass empty Vec to skip (Phase 1 backward compatibility).
+    pub encrypted_note: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, JsonSchema, UniversalWallet)]
@@ -484,6 +517,12 @@ pub struct TransferMessage {
     pub sanctions_proof: Vec<u8>,
     /// Public inputs for sanctions proof verification
     pub sanctions_public_inputs: SanctionsPublicInputs,
+    /// Encrypted output notes for viewing key support.
+    /// One EncryptedNote per output_commitment (same order).
+    /// Each must contain enc_for_recipient (with recipient's viewing key)
+    /// AND enc_for_compliance (with COMPLIANCE_ORACLE_PUBKEY — mandatory).
+    /// Pass empty Vec to skip (Phase 1 backward compatibility).
+    pub encrypted_outputs: Vec<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, JsonSchema, UniversalWallet)]

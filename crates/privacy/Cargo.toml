@@ -14,6 +14,9 @@ schemars = "0.8"
 borsh = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 hex = "0.4"
+x25519-dalek = { version = "2", features = ["static_secrets", "getrandom"] }
+getrandom = "0.2"
+rand = "0.8"
 
 # SP1 prover (Phase 2 — real ZK proofs)
 sp1-sdk = { version = "6.0.2", optional = true, features = ["blocking"] }

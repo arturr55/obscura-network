@@ -6973,7 +6973,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "borsh",
+ "getrandom 0.2.17",
  "hex",
+ "rand 0.8.5",
  "schemars 0.8.22",
  "serde",
  "sha2 0.10.9",
@@ -6984,6 +6986,7 @@ dependencies = [
  "sp1-verifier",
  "tokio",
  "tracing",
+ "x25519-dalek",
 ]
 
 [[package]]
@@ -15972,6 +15975,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "05f360fc0b24296329c78fda852a1e9ae82de9cf7b27dae4b7f62f118f77b9ed"
 dependencies = [
  "tap",
+]
+
+[[package]]
+name = "x25519-dalek"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7e468321c81fb07fa7f4c636c3972b9100f0346e5b6a9f2bd0603a52f7ed277"
+dependencies = [
+ "curve25519-dalek",
+ "rand_core 0.6.4",
+ "serde",
+ "zeroize",
 ]
 
 [[package]]
