@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { useAccount, useWalletClient } from "wagmi";
 import {
   loadNotes,
   markNoteSpent,
@@ -12,13 +13,59 @@ import {
   formatAmount,
   type StoredNote,
 } from "@/lib/notes";
+import {
+  getCachedDerivedKey,
+  saveDerivedKey,
+  deriveViewingKeyFromSignature,
+  scanChainForMyNotes,
+} from "@/lib/obscura-crypto";
 
 export default function NotesPage() {
   const [notes, setNotes] = useState<StoredNote[]>([]);
   const [filter, setFilter] = useState<"all" | "unspent" | "spent">("unspent");
   const [importMsg, setImportMsg] = useState<string | null>(null);
+  const [scanMsg, setScanMsg] = useState<string | null>(null);
+  const [scanLoading, setScanLoading] = useState(false);
+  const [viewingKey, setViewingKey] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
+  const { address } = useAccount();
+  const { data: walletClient } = useWalletClient();
+
+  useEffect(() => {
+    if (address) {
+      const cached = getCachedDerivedKey(address);
+      if (cached) setViewingKey(cached);
+    }
+  }, [address]);
+
+  async function handleDeriveAndScan() {
+    if (!walletClient || !address) return;
+    setScanLoading(true);
+    setScanMsg(null);
+    try {
+      let key = getCachedDerivedKey(address);
+      if (!key) {
+        const sig = await walletClient.signMessage({ message: "obscura-viewing-key-v1" });
+        key = await deriveViewingKeyFromSignature(sig);
+        saveDerivedKey(address, key);
+        setViewingKey(key);
+      }
+      setScanMsg("Scanning chain for your notes…");
+      const { found, total } = await scanChainForMyNotes(key);
+      refresh();
+      setScanMsg(
+        found > 0
+          ? `Found ${found} new note${found > 1 ? "s" : ""} out of ${total} on-chain commitments!`
+          : `Scanned ${total} on-chain commitment${total !== 1 ? "s" : ""} — no new notes found.`
+      );
+    } catch {
+      setScanMsg("Scan failed — check your connection.");
+    } finally {
+      setScanLoading(false);
+      setTimeout(() => setScanMsg(null), 8000);
+    }
+  }
 
   useEffect(() => {
     setNotes(loadNotes());
@@ -91,15 +138,43 @@ export default function NotesPage() {
       </div>
 
       {/* Warning */}
-      <div className="border border-yellow-700/40 bg-yellow-900/20 rounded-xl px-4 py-3 mb-6 flex items-start gap-3">
+      <div className="border border-yellow-700/40 bg-yellow-900/20 rounded-xl px-4 py-3 mb-4 flex items-start gap-3">
         <span className="text-yellow-400 text-lg mt-0.5">⚠</span>
         <div className="text-yellow-300 text-sm">
-          <strong>Notes are stored only in this browser.</strong> If you clear cache or switch browsers they will be lost.
+          <strong>Notes are stored locally in this browser.</strong> Use &quot;Scan chain&quot; to recover notes on a new device, or export a backup.
           <button onClick={exportNotes} className="ml-2 underline hover:no-underline text-yellow-200">
             Export backup →
           </button>
         </div>
       </div>
+
+      {/* Scan chain for notes */}
+      {address && (
+        <div className="border border-purple-700/40 bg-purple-900/10 rounded-xl px-4 py-3 mb-6 flex items-center justify-between gap-4">
+          <div>
+            <div className="text-purple-200 text-sm font-medium">
+              {viewingKey ? "Recover notes from chain" : "Scan chain for your notes"}
+            </div>
+            <div className="text-gray-400 text-xs mt-0.5">
+              {viewingKey
+                ? "Scan all on-chain commitments and import notes encrypted for your wallet"
+                : "Sign once to derive your viewing key, then scan for notes sent to you"}
+            </div>
+            {scanMsg && (
+              <div className={`text-xs mt-1.5 font-medium ${scanMsg.includes("Found") ? "text-green-400" : "text-gray-300"}`}>
+                {scanMsg}
+              </div>
+            )}
+          </div>
+          <button
+            onClick={handleDeriveAndScan}
+            disabled={scanLoading}
+            className="shrink-0 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors"
+          >
+            {scanLoading ? "Scanning…" : viewingKey ? "Scan chain" : "Sign & Scan"}
+          </button>
+        </div>
+      )}
 
       {/* Actions */}
       <div className="flex gap-2 mb-6 flex-wrap">

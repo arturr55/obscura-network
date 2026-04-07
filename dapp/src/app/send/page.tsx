@@ -9,6 +9,14 @@ import { wagmiConfig } from "@/lib/wagmi";
 import { CONTRACTS, BILLING_ABI, ERC20_ABI, BRIDGE_ABI } from "@/lib/contracts";
 import { saveNote, markNoteSpent, loadNotes } from "@/lib/notes";
 import { addHistoryEntry } from "@/lib/history";
+import {
+  saveEncryptedNote,
+  encodeNoteForChain,
+  getCachedDerivedKey,
+  saveDerivedKey,
+  deriveViewingKeyFromSignature,
+  getOrCreateViewingKey,
+} from "@/lib/obscura-crypto";
 
 const NODE_PROXY = "/api/node";
 const DEFAULT_ASSET_ID = "0000000000000000000000000000000000000000000000000000000000000001";
@@ -153,8 +161,35 @@ function addressToBytes32(addr: string): `0x${string}` {
 
 export default function SendPage() {
   const { address, isConnected } = useAccount();
-  const {} = useWalletClient();
+  const { data: walletClient } = useWalletClient();
   const { writeContractAsync } = useWriteContract();
+
+  // Wallet-derived viewing key (same on all devices with same wallet)
+  const [viewingKey, setViewingKey] = useState<string | null>(null);
+  const [vkLoading, setVkLoading] = useState(false);
+
+  // Derive or load cached viewing key when wallet connects
+  useEffect(() => {
+    if (!address) { setViewingKey(null); return; }
+    const cached = getCachedDerivedKey(address);
+    if (cached) { setViewingKey(cached); return; }
+    setViewingKey(null); // user will need to sign
+  }, [address]);
+
+  async function deriveViewingKey() {
+    if (!walletClient || !address) return;
+    setVkLoading(true);
+    try {
+      const sig = await walletClient.signMessage({ message: "obscura-viewing-key-v1" });
+      const key = await deriveViewingKeyFromSignature(sig);
+      saveDerivedKey(address, key);
+      setViewingKey(key);
+    } catch {
+      // user rejected signing
+    } finally {
+      setVkLoading(false);
+    }
+  }
 
   const [txType, setTxType] = useState<TxType>("shield");
   const [amount, setAmount] = useState("");
@@ -262,6 +297,22 @@ export default function SendPage() {
     setStatus({ type: "info", msg: "Building Shield transaction..." });
     try {
       const amountRaw = Math.floor(Number(amount) * 1e9);
+      const commitment = "0x" + randomHex(32);
+      const createdAt = Date.now();
+      const noteContent = {
+        amount: amount,
+        amountRaw: amountRaw.toString(),
+        assetId: DEFAULT_ASSET_ID,
+        commitment,
+        memo: "",
+        createdAt,
+        type: "shield" as const,
+      };
+
+      // Encrypt note for on-chain storage (wallet-derived key or fallback)
+      const activeKey = viewingKey ?? getOrCreateViewingKey();
+      const encryptedNoteBytes = await encodeNoteForChain(noteContent, activeKey);
+
       const callMsg = {
         obscura_privacy: {
           shield: {
@@ -273,6 +324,7 @@ export default function SendPage() {
                 : Array(20).fill(0),
               salt: Array.from({ length: 32 }, () => Math.floor(Math.random() * 256)),
             },
+            encrypted_note: encryptedNoteBytes,
           },
         },
       };
@@ -285,13 +337,14 @@ export default function SendPage() {
       });
 
       const note: SavedNote = {
-        commitment: "0x" + randomHex(32),
+        commitment,
         nullifier: "0x" + randomHex(32),
         amount: amountRaw.toString(),
         asset_id: DEFAULT_ASSET_ID,
       };
       setSavedNote(JSON.stringify(note, null, 2));
       saveNote({ type: "shield", ...note });
+      await saveEncryptedNote(noteContent, activeKey);
       addHistoryEntry({ type: "shield", status: "success", amount: amountRaw.toString() });
       setStatus({
         type: "success",
@@ -346,6 +399,20 @@ export default function SendPage() {
       const recipientCommitment = Array(32).fill(0); // mock: circuit computes this
       const proofTimestamp = sanctions.proofTimestamp || Math.floor(Date.now() / 1000);
 
+      const outputNoteContent = {
+        amount: amount,
+        amountRaw: amountRaw.toString(),
+        assetId: DEFAULT_ASSET_ID,
+        commitment: outputCommitment,
+        memo: `to:${recipient}`,
+        createdAt: Date.now(),
+        type: "transfer" as const,
+      };
+
+      // Encrypt output note for on-chain storage (use sender's key as fallback)
+      const activeKey = viewingKey ?? getOrCreateViewingKey();
+      const encryptedOutput = await encodeNoteForChain(outputNoteContent, activeKey);
+
       const callMsg = {
         obscura_privacy: {
           transfer: {
@@ -364,6 +431,8 @@ export default function SendPage() {
               sanctions_root: sanctionsRoot,
               proof_timestamp: proofTimestamp,
             },
+            // Encrypted output notes stored on-chain for recipient discovery
+            encrypted_outputs: [encryptedOutput],
           },
         },
       };
@@ -391,6 +460,7 @@ export default function SendPage() {
 
       // Save output note + mark input note spent
       saveNote({ type: "transfer_out", ...outputNote });
+      await saveEncryptedNote(outputNoteContent, activeKey);
       addHistoryEntry({ type: "transfer", status: "success", amount: amountRaw.toString(), recipient });
 
       // Generate shareable receive link (fragment = base64url encoded note)
@@ -666,6 +736,25 @@ export default function SendPage() {
           </Link>
         </div>
       </div>
+
+      {/* Viewing key banner — shown until user signs */}
+      {!viewingKey && (
+        <div className="border border-yellow-600/40 bg-yellow-900/20 rounded-xl p-4 mb-6 flex items-center justify-between gap-4">
+          <div>
+            <div className="text-yellow-300 text-sm font-medium">Enable on-chain note storage</div>
+            <div className="text-gray-400 text-xs mt-0.5">
+              Sign once to derive your viewing key — notes will be recoverable on any device
+            </div>
+          </div>
+          <button
+            onClick={deriveViewingKey}
+            disabled={vkLoading || !walletClient}
+            className="shrink-0 bg-yellow-600 hover:bg-yellow-500 disabled:opacity-50 text-black text-sm font-semibold px-4 py-2 rounded-lg transition-colors"
+          >
+            {vkLoading ? "Signing…" : "Sign"}
+          </button>
+        </div>
+      )}
 
       {/* Subscription status */}
       <div className={`border rounded-xl p-4 mb-6 flex items-center justify-between ${
