@@ -225,6 +225,44 @@
       0
     ],
     "max_proof_age_secs": 604800,
-    "admin": []
+    "admin": [],
+    "helios": {
+      "initial_trusted_beacon_root": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "initial_trusted_slot": 0,
+      "max_slot_gap": 8192
+    }
   }
 }
