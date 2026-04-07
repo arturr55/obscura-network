@@ -18,8 +18,13 @@
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-/** Compliance oracle testnet key. Matches COMPLIANCE_ORACLE_PUBKEY in Rust. */
+/**
+ * Oracle encryption key — used in the browser to encrypt notes for the compliance oracle.
+ * Set via NEXT_PUBLIC_ORACLE_ENC_KEY env var. The matching decryption key lives
+ * server-side only (ORACLE_DECRYPT_KEY) and is never sent to the browser.
+ */
 export const ORACLE_KEY_HEX =
+  process.env.NEXT_PUBLIC_ORACLE_ENC_KEY ??
   "d47ee5dbcced129e126c8a6e54d369eaad0125e580f745ef94d74ed243b23678";
 
 const STORAGE_KEY_VIEWING = "obscura_viewing_key";
