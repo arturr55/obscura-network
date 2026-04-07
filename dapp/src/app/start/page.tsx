@@ -27,22 +27,42 @@ export default function StartPage() {
         </div>
       )}
 
-      {/* Role cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 w-full max-w-3xl">
-        <RoleCard
-          icon="💸"
-          title="I want to send privately"
-          desc="Bridge tokens → Shield → Transfer to any address. The link between sender and recipient is invisible on-chain."
-          steps={["Bridge USDC from Ethereum", "Shield into private pool", "Transfer to recipient"]}
+      {/* Primary action — Bridge */}
+      <div className="w-full max-w-3xl mb-4">
+        <Link
           href="/send"
-          cta="Start sending →"
-          color="purple"
-        />
+          className="group flex flex-col sm:flex-row items-center gap-6 bg-obscura-card border border-purple-700/50 hover:border-purple-500 rounded-2xl p-7 transition-all duration-200 hover:-translate-y-0.5"
+        >
+          <div className="w-16 h-16 rounded-2xl bg-purple-900/50 flex items-center justify-center text-3xl shrink-0">
+            🌉
+          </div>
+          <div className="flex-1 text-center sm:text-left">
+            <div className="text-purple-400 text-xs font-bold tracking-widest mb-1">MAIN FEATURE</div>
+            <div className="text-white font-bold text-xl mb-1">Bridge privately between chains</div>
+            <div className="text-gray-400 text-sm">
+              Send from Ethereum → receive on Arbitrum, Base, Polygon from a fresh address.
+              The link is invisible on-chain. ZK compliance proof included.
+            </div>
+            <div className="flex flex-wrap gap-2 mt-3 justify-center sm:justify-start">
+              {["Ethereum", "Arbitrum", "Base", "Polygon"].map(n => (
+                <span key={n} className="bg-purple-900/30 border border-purple-700/30 text-purple-300 text-xs px-2 py-0.5 rounded-full">{n}</span>
+              ))}
+              <span className="text-gray-600 text-xs px-2 py-0.5">+ more soon</span>
+            </div>
+          </div>
+          <div className="bg-purple-600 group-hover:bg-purple-500 text-white font-semibold px-6 py-3 rounded-xl transition-colors shrink-0">
+            Bridge Now →
+          </div>
+        </Link>
+      </div>
+
+      {/* Secondary actions */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full max-w-3xl">
         <RoleCard
           icon="📥"
-          title="I received a payment"
-          desc="Someone sent you a private Note. Claim your funds and withdraw to your wallet."
-          steps={["Paste the Note you received", "See your balance", "Unshield to your wallet"]}
+          title="I received funds"
+          desc="Someone sent you a private Note. Claim and withdraw to your wallet."
+          steps={["Paste the Note link", "See your amount", "Unshield to wallet"]}
           href="/receive"
           cta="Claim funds →"
           color="green"
@@ -50,8 +70,8 @@ export default function StartPage() {
         <RoleCard
           icon="🔍"
           title="I'm an auditor"
-          desc="View transactions with a viewing key shared by the user, or use oracle access for compliance checks."
-          steps={["Get viewing key from user", "Paste key to decrypt notes", "Or use compliance oracle"]}
+          desc="View transactions with a viewing key, or use oracle access for compliance."
+          steps={["Get viewing key from user", "Decrypt their notes", "Or use compliance oracle"]}
           href="/audit"
           cta="Open audit →"
           color="blue"

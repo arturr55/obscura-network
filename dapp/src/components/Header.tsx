@@ -19,6 +19,7 @@ export function Header() {
           <Link href="/send" className="hover:text-white transition-colors text-purple-400 hover:text-purple-300">Send TX</Link>
           <Link href="/notes" className="hover:text-white transition-colors">Notes</Link>
           <Link href="/history" className="hover:text-white transition-colors">History</Link>
+          <Link href="/audit" className="hover:text-white transition-colors text-purple-400 hover:text-purple-300">Audit</Link>
           <Link href="/compliance" className="hover:text-white transition-colors text-green-400 hover:text-green-300">ZKCompliance</Link>
           <a href="https://github.com/arturr55/obscura-network" target="_blank" rel="noreferrer" className="hover:text-white transition-colors">Docs</a>
         </nav>

@@ -191,7 +191,7 @@ export default function SendPage() {
     }
   }
 
-  const [txType, setTxType] = useState<TxType>("shield");
+  const [txType, setTxType] = useState<TxType>("bridge");
   const [amount, setAmount] = useState("");
   const [recipient, setRecipient] = useState("");
   const [inputNote, setInputNote] = useState("");

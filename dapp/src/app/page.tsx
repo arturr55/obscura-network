@@ -92,22 +92,41 @@ export default function Home() {
           Live on Ethereum Sepolia Testnet
         </div>
         <h1 className="text-5xl md:text-6xl font-bold text-white mb-6 leading-tight">
-          Private Transactions<br />
+          Bridge across chains.<br />
           <span className="bg-gradient-to-r from-purple-400 to-violet-500 bg-clip-text text-transparent">
-            by Default
+            Privately. Legally.
           </span>
         </h1>
-        <p className="text-xl text-gray-400 mb-10 max-w-2xl mx-auto">
-          ZK Rollup on Celestia. Every transaction is shielded with zero-knowledge proofs.
-          Pay per transaction or subscribe monthly.
+        <p className="text-xl text-gray-400 mb-4 max-w-2xl mx-auto">
+          Send USDC from Ethereum — receive on Arbitrum from a fresh address.
+          The link between sender and recipient is invisible on-chain.
         </p>
+        <p className="text-sm text-green-400 mb-10 max-w-xl mx-auto">
+          Unlike Tornado Cash — every transfer includes a ZK compliance proof.
+          Regulators see you&apos;re clean. They don&apos;t see amounts or addresses.
+        </p>
+
+        {/* Bridge flow illustration */}
+        <div className="flex items-center justify-center gap-3 mb-10 flex-wrap text-sm">
+          <div className="bg-obscura-card border border-obscura-border rounded-xl px-4 py-2 text-gray-300">
+            Ethereum <span className="text-gray-500 text-xs ml-1">your KYC address</span>
+          </div>
+          <div className="text-purple-400 font-bold text-lg">→ Obscura →</div>
+          <div className="bg-obscura-card border border-obscura-border rounded-xl px-4 py-2 text-gray-300">
+            Arbitrum <span className="text-gray-500 text-xs ml-1">fresh address</span>
+          </div>
+          <div className="bg-green-900/30 border border-green-700/40 rounded-xl px-4 py-2 text-green-400 text-xs font-semibold">
+            ✓ ZK Compliance Proof
+          </div>
+        </div>
+
         <div className="flex flex-col sm:flex-row gap-4 justify-center">
           {isConnected ? (
             <Link
-              href="/dashboard"
+              href="/send"
               className="bg-purple-600 hover:bg-purple-700 text-white px-8 py-3 rounded-xl font-semibold transition-colors"
             >
-              Open Dashboard
+              Bridge Now →
             </Link>
           ) : (
             <ConnectButton.Custom>
@@ -116,7 +135,7 @@ export default function Home() {
                   onClick={openConnectModal}
                   className="bg-purple-600 hover:bg-purple-700 text-white px-8 py-3 rounded-xl font-semibold transition-colors"
                 >
-                  Connect Wallet
+                  Connect Wallet to Bridge
                 </button>
               )}
             </ConnectButton.Custom>
@@ -132,6 +151,26 @@ export default function Home() {
         </div>
       </section>
 
+      {/* How it works */}
+      <section className="max-w-6xl mx-auto px-4 pb-16">
+        <div className="grid md:grid-cols-3 gap-4">
+          {[
+            { step: "1", title: "Deposit on any chain", desc: "Send USDC (or ETH, USDT) from Ethereum, Arbitrum, Base, Polygon — any EVM chain.", icon: "⬇" },
+            { step: "2", title: "Obscura shields it", desc: "Funds enter a ZK shielded pool. Your deposit address and amount become private.", icon: "🔒" },
+            { step: "3", title: "Withdraw anywhere", desc: "Receive on any chain to a fresh address. On-chain link between deposit and withdrawal is invisible.", icon: "✓" },
+          ].map((item) => (
+            <div key={item.step} className="bg-obscura-card border border-obscura-border rounded-2xl p-6">
+              <div className="w-10 h-10 rounded-full bg-purple-900/40 border border-purple-700/40 flex items-center justify-center text-lg mb-4">
+                {item.icon}
+              </div>
+              <div className="text-gray-500 text-xs font-bold tracking-widest mb-1">STEP {item.step}</div>
+              <div className="text-white font-semibold mb-2">{item.title}</div>
+              <div className="text-gray-500 text-sm leading-relaxed">{item.desc}</div>
+            </div>
+          ))}
+        </div>
+      </section>
+
       {/* Stats */}
       <section className="max-w-6xl mx-auto px-4 pb-16">
         <LiveStats />
@@ -141,11 +180,12 @@ export default function Home() {
       <section className="max-w-6xl mx-auto px-4 pb-16">
         <div className="bg-gradient-to-br from-green-900/20 to-purple-900/20 border border-green-700/30 rounded-2xl p-8 flex flex-col md:flex-row items-center justify-between gap-6">
           <div>
-            <div className="text-green-400 text-xs font-bold tracking-widest mb-2">PROTOCOL-NATIVE COMPLIANCE</div>
+            <div className="text-green-400 text-xs font-bold tracking-widest mb-2">WHY WE&apos;RE DIFFERENT FROM TORNADO CASH</div>
             <h2 className="text-2xl font-bold text-white mb-2">Privacy AND compliance. Not a trade-off.</h2>
             <p className="text-gray-400 max-w-lg">
-              Every transfer proves OFAC non-membership with ZK proofs. Regulators see compliance — not amounts, not addresses.
-              Tornado Cash was blocked because it offered privacy <em>without</em> compliance. Obscura offers both.
+              Tornado Cash was blocked by OFAC because it had no compliance layer.
+              Obscura includes a ZK sanctions proof in every transfer — regulators see you&apos;re clean,
+              without seeing your amounts or addresses.
             </p>
           </div>
           <Link
