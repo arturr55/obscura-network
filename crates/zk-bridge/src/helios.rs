@@ -55,14 +55,81 @@ pub fn verify_helios_proof(proof: &[u8], inputs: &HeliosPublicInputs) -> Result<
 }
 
 #[cfg(feature = "native")]
-fn verify_helios_sp1_proof(_proof: &[u8], _inputs: &HeliosPublicInputs) -> Result<()> {
-    // Phase 2: implement real SP1 Groth16 verification.
-    //
-    // Steps:
-    //   1. Load ELF: include_bytes!("../../provers/sp1/guest-helios/elf/helios-step")
-    //   2. Build ProverClient: sp1_sdk::ProverClient::builder().network().build()
-    //   3. Deserialize proof from bytes (Groth16Proof)
-    //   4. Verify: client.verify(&proof, &vk)
-    //   5. Check public values match `inputs`
-    bail!("Helios: real SP1 verification not yet implemented (Phase 2 feature).")
+fn verify_helios_sp1_proof(proof_bytes: &[u8], inputs: &HeliosPublicInputs) -> Result<()> {
+    use anyhow::Context;
+    use sp1_sdk::{ProverClient, SP1ProofWithPublicValues};
+
+    // Load the Helios guest ELF to derive the verifying key.
+    // The VK is derived deterministically from the ELF, so the same ELF always
+    // produces the same VK. Any tampering with the ELF changes the VK and
+    // invalidates all proofs.
+    const HELIOS_ELF_PATH: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../provers/sp1/guest-helios/elf/helios-step"
+    );
+    let elf = std::fs::read(HELIOS_ELF_PATH)
+        .with_context(|| {
+            format!(
+                "Helios ELF not found at {HELIOS_ELF_PATH}. \
+                 Build it with: cd crates/provers/sp1/guest-helios && cargo prove build"
+            )
+        })?;
+
+    let client = ProverClient::from_env();
+    let (_, vk) = client.setup(&elf);
+
+    // Deserialize the Groth16 proof (bincode-encoded SP1ProofWithPublicValues)
+    let proof: SP1ProofWithPublicValues = bincode::deserialize(proof_bytes)
+        .context("Helios: deserialize SP1 proof failed")?;
+
+    // Cryptographic proof verification (Groth16 pairing check)
+    client
+        .verify(&proof, &vk)
+        .context("Helios: SP1 Groth16 proof verification failed")?;
+
+    // Check that the proof's committed public outputs match the submitted inputs.
+    // This prevents a valid proof from a different update being replayed.
+    let mut pub_vals = proof.public_values.clone();
+    // The circuit commits HeliosPublicOutputs (mirrors HeliosPublicInputs fields)
+    let committed_prev_root: [u8; 32] = pub_vals.read();
+    let committed_new_root: [u8; 32] = pub_vals.read();
+    let committed_slot: u64 = pub_vals.read();
+    let committed_block_hash: [u8; 32] = pub_vals.read();
+
+    if committed_prev_root != inputs.prev_trusted_root {
+        bail!(
+            "Helios: proof prev_trusted_root mismatch — expected 0x{}, got 0x{}",
+            hex::encode(inputs.prev_trusted_root),
+            hex::encode(committed_prev_root)
+        );
+    }
+    if committed_new_root != inputs.new_beacon_root {
+        bail!(
+            "Helios: proof new_beacon_root mismatch — expected 0x{}, got 0x{}",
+            hex::encode(inputs.new_beacon_root),
+            hex::encode(committed_new_root)
+        );
+    }
+    if committed_slot != inputs.new_slot {
+        bail!(
+            "Helios: proof new_slot mismatch — expected {}, got {}",
+            inputs.new_slot,
+            committed_slot
+        );
+    }
+    if committed_block_hash != inputs.execution_block_hash {
+        bail!(
+            "Helios: proof execution_block_hash mismatch — expected 0x{}, got 0x{}",
+            hex::encode(inputs.execution_block_hash),
+            hex::encode(committed_block_hash)
+        );
+    }
+
+    tracing::info!(
+        "Helios: SP1 proof verified — slot {} → block 0x{}",
+        committed_slot,
+        hex::encode(committed_block_hash)
+    );
+
+    Ok(())
 }

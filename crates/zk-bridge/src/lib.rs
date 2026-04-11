@@ -69,4 +69,6 @@ pub mod helios;
 pub mod helios_types;
 
 #[cfg(feature = "relayer")]
+pub mod beacon_api;
+#[cfg(feature = "relayer")]
 pub mod relayer;

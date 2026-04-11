@@ -31,10 +31,20 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use tracing::{info, warn};
 
+use crate::beacon_api::{BeaconApiClient, build_helios_witness, HeliosWitness};
 use crate::types::{BridgePublicInputs, ClaimDeposit};
 use crate::verifier::MOCK_PROOF_PREFIX;
 use crate::helios_types::{HeliosPublicInputs, UpdateHeliosHead};
 use crate::helios::MOCK_HELIOS_PREFIX;
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+/// Ethereum beacon chain slots per epoch (32 slots × 12 s/slot = 6.4 min).
+///
+/// Cost reduction: submit one Helios proof per epoch, not per deposit.
+/// All deposits within the same epoch share a single ZK proof.
+/// This reduces Helios proving cost by ~32× compared to per-block updates.
+const SLOTS_PER_EPOCH: u64 = 32;
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -42,6 +52,15 @@ use crate::helios::MOCK_HELIOS_PREFIX;
 pub struct RelayerConfig {
     /// Ethereum JSON-RPC endpoint (Alchemy, Infura, etc.)
     pub eth_rpc: String,
+
+    /// Ethereum Beacon Chain (Consensus Layer) API endpoint.
+    ///
+    /// Used to fetch `LightClientFinalityUpdate` for Helios witness construction.
+    ///
+    /// Public endpoints:
+    ///   - Sepolia:  https://lodestar-sepolia.chainsafe.io
+    ///   - Mainnet:  https://lodestar-mainnet.chainsafe.io
+    pub beacon_url: String,
 
     /// ObscuraBridge.sol address on Ethereum
     pub bridge_contract: String,
@@ -91,37 +110,43 @@ pub struct BridgeRelayer {
     processed: HashSet<u64>,
     eth_client: EthClient,
     obscura_client: ObscuraClient,
+    beacon_client: BeaconApiClient,
 }
 
 impl BridgeRelayer {
     pub fn new(config: RelayerConfig) -> Result<Self> {
         let eth_client = EthClient::new(&config.eth_rpc, &config.bridge_contract)?;
         let obscura_client = ObscuraClient::new(&config.obscura_rpc)?;
+        let beacon_client = BeaconApiClient::new(&config.beacon_url);
         Ok(Self {
             config,
             processed: HashSet::new(),
             eth_client,
             obscura_client,
+            beacon_client,
         })
     }
 
     /// Run the relayer event loop.
     ///
     /// Each iteration:
-    ///   1. Submit a Helios proof for the latest finalized beacon block (if new deposits exist)
+    ///   1. Submit a Helios proof once per epoch (cost reduction: ~32× vs per-block)
     ///   2. Scan Ethereum for DepositLocked events and relay them to Obscura
     pub async fn run(&mut self) -> Result<()> {
         info!(
-            "Bridge relayer started: contract={}, mock_proofs={}",
+            "Bridge relayer started: contract={}, beacon={}, mock_proofs={}",
             self.config.bridge_contract,
+            self.config.beacon_url,
             self.config.mock_proofs
         );
 
         let mut from_block = self.config.start_block;
-        let mut last_helios_block: u64 = 0;
+        // Track last epoch for which we submitted a Helios update.
+        // Epoch = slot / SLOTS_PER_EPOCH.  We use block_number as a slot proxy.
+        let mut last_helios_epoch: u64 = 0;
 
         loop {
-            match self.scan_and_relay(from_block, &mut last_helios_block).await {
+            match self.scan_and_relay(from_block, &mut last_helios_epoch).await {
                 Ok(last_block) => {
                     from_block = last_block.saturating_add(1);
                 }
@@ -137,31 +162,45 @@ impl BridgeRelayer {
         }
     }
 
-    async fn scan_and_relay(&mut self, from_block: u64, last_helios_block: &mut u64) -> Result<u64> {
-        // Get latest finalized block
+    async fn scan_and_relay(
+        &mut self,
+        from_block: u64,
+        last_helios_epoch: &mut u64,
+    ) -> Result<u64> {
         let latest = self.eth_client.get_latest_block().await?;
         if from_block > latest {
             return Ok(latest);
         }
 
-        // Scan for DepositLocked events in range
         let logs = self
             .eth_client
             .get_deposit_events(from_block, latest)
             .await?;
 
-        // If there are new deposits, submit a Helios proof first so
-        // the rollup can verify them trustlessly.
-        if !logs.is_empty() && latest != *last_helios_block {
+        // ── Epoch-based Helios update (cost reduction strategy) ────────────────
+        //
+        // We submit at most one Helios proof per epoch (every ~6.4 minutes).
+        // All deposits in the same epoch share the same finality proof.
+        // This reduces proving cost by ~32× compared to per-block updates.
+        //
+        // When Helios is inactive (mock mode or no deposits), we skip this.
+        let current_epoch = latest / SLOTS_PER_EPOCH;
+        if !logs.is_empty() && current_epoch > *last_helios_epoch {
             match self.submit_helios_update(latest).await {
                 Ok(_) => {
-                    info!("Helios: updated trusted beacon root for block {}", latest);
-                    *last_helios_block = latest;
+                    info!(
+                        "Helios: epoch {} → trusted beacon root updated (block {})",
+                        current_epoch, latest
+                    );
+                    *last_helios_epoch = current_epoch;
                 }
                 Err(e) => {
-                    warn!("Helios update failed (deposits may be delayed): {e}");
-                    // Don't bail — deposits still work in Phase 1 (trusted mode)
-                    // once Helios is fully activated, this would block deposits
+                    warn!(
+                        "Helios epoch {} update failed (deposits proceed in trusted mode): {e}",
+                        current_epoch
+                    );
+                    // Don't bail — deposits still work in Phase 1 (trusted relayer).
+                    // Once Helios is mandatory (Phase 2), this would block deposits.
                 }
             }
         }
@@ -174,7 +213,7 @@ impl BridgeRelayer {
             match self.relay_deposit(&log).await {
                 Ok(_) => {
                     info!(
-                        "Relayed deposit {}: {} USDC → {:?}",
+                        "Relayed deposit {}: {} USDC → {}",
                         log.deposit_id,
                         log.amount,
                         hex::encode(log.obscura_recipient)
@@ -183,7 +222,6 @@ impl BridgeRelayer {
                 }
                 Err(e) => {
                     warn!("Failed to relay deposit {}: {e}", log.deposit_id);
-                    // Will retry next scan
                 }
             }
         }
@@ -193,84 +231,108 @@ impl BridgeRelayer {
 
     /// Submit a Helios head update to the Obscura rollup.
     ///
-    /// In mock mode: creates a mock Helios proof for the given ETH block.
-    /// In real mode: generates and submits a real SP1 Helios proof.
-    async fn submit_helios_update(&self, eth_block_number: u64) -> Result<()> {
-        // Fetch the beacon block root for this ETH block (via EIP-4788)
-        let beacon_root = self
-            .eth_client
-            .get_beacon_root(eth_block_number)
-            .await?;
-
-        // Fetch the ETH block hash
-        let block = self
-            .eth_client
-            .eth_call(
-                "eth_getBlockByNumber",
-                serde_json::json!([format!("0x{:x}", eth_block_number), false]),
-            )
-            .await?;
-        let eth_block_hash_hex = block["hash"].as_str().unwrap_or("0x00");
-        let eth_block_hash = hex_decode(eth_block_hash_hex)?;
-        if eth_block_hash.len() != 32 {
-            anyhow::bail!("Helios: invalid eth_block_hash length");
-        }
-        let mut eth_block_hash_arr = [0u8; 32];
-        eth_block_hash_arr.copy_from_slice(&eth_block_hash);
-
-        // Query the rollup for its current trusted beacon root and slot
+    /// Fetches the latest `LightClientFinalityUpdate` from the beacon API,
+    /// builds a `HeliosWitness`, and generates a proof (mock or real SP1).
+    async fn submit_helios_update(&self, _eth_block_number: u64) -> Result<()> {
+        // ── Query rollup for current trusted state ─────────────────────────────
         let (current_trusted_root, current_slot) = self
             .obscura_client
             .get_helios_state()
             .await
             .unwrap_or(([0u8; 32], 0));
 
-        // New slot: use eth_block_number as a proxy for slot (real: fetch from beacon API)
-        // In production, fetch the actual beacon slot from the CL API.
-        let new_slot = eth_block_number; // simplified for Phase 1
+        // ── Fetch finality update from beacon API ──────────────────────────────
+        let update = self
+            .beacon_client
+            .get_finality_update()
+            .await
+            .context("Helios: get_finality_update failed")?;
+
+        let new_slot: u64 = update
+            .finalized_header
+            .beacon
+            .slot
+            .parse()
+            .context("Helios: parse finalized slot")?;
 
         if new_slot <= current_slot {
-            // Already up to date
+            tracing::debug!("Helios: already up to date (slot {})", current_slot);
             return Ok(());
         }
 
-        // Build public inputs
+        // ── Build witness ──────────────────────────────────────────────────────
+        let genesis = self
+            .beacon_client
+            .get_genesis()
+            .await
+            .context("Helios: get_genesis failed")?;
+
+        // For Phase 1 (mock BLS), any non-zero pubkey passes.
+        // For Phase 2: fetch aggregate_pubkey from bootstrap API.
+        let sync_committee_pubkey = self
+            .beacon_client
+            .get_sync_committee_aggregate_pubkey(
+                &update.finalized_header.beacon.parent_root,
+            )
+            .await
+            .unwrap_or([1u8; 48]); // fallback: non-zero placeholder
+
+        let witness = build_helios_witness(
+            &update,
+            &genesis,
+            sync_committee_pubkey,
+            current_trusted_root,
+        )
+        .context("Helios: build_helios_witness failed")?;
+
+        // Build public inputs from what the circuit will commit to
         let public_inputs = HeliosPublicInputs {
             prev_trusted_root: current_trusted_root,
-            new_beacon_root: beacon_root,
+            new_beacon_root: witness.execution_payload_root, // circuit commits new_beacon_root
             new_slot,
-            execution_block_hash: eth_block_hash_arr,
+            execution_block_hash: witness.execution_block_hash,
         };
 
-        // Generate Helios proof (mock or real)
+        // ── Generate proof (mock or real SP1) ──────────────────────────────────
         let proof = if self.config.mock_proofs {
-            // Mock: "OBShelios" + slot as 8 bytes LE
             let mut p = MOCK_HELIOS_PREFIX.to_vec();
             p.extend_from_slice(&new_slot.to_le_bytes());
             p
         } else {
-            self.generate_helios_sp1_proof(&public_inputs).await?
+            self.generate_helios_sp1_proof(&witness, &public_inputs)
+                .await?
         };
 
-        // Submit to Obscura rollup
-        let update = UpdateHeliosHead { proof, public_inputs };
-        self.obscura_client.submit_helios_update(update).await?;
+        // ── Submit to rollup ───────────────────────────────────────────────────
+        let update_msg = UpdateHeliosHead { proof, public_inputs };
+        self.obscura_client.submit_helios_update(update_msg).await?;
 
         Ok(())
     }
 
+    /// Generate a real SP1 Helios proof using the Succinct Prover Network.
+    ///
+    /// Requires:
+    ///   - `--features native` (enables sp1-sdk dependency)
+    ///   - `SP1_PRIVATE_KEY` env var (Succinct Prover Network key)
+    ///   - Guest ELF compiled: `cargo prove build` in `crates/provers/sp1/guest-helios/`
+    ///
+    /// The proof is serialized with `bincode` and can be verified with
+    /// `verify_helios_proof()` in `helios.rs`.
     #[allow(unused_variables)]
-    async fn generate_helios_sp1_proof(&self, inputs: &HeliosPublicInputs) -> Result<Vec<u8>> {
-        // Phase 2: Generate real SP1 Helios proof.
-        //
-        // Steps:
-        //   1. Fetch full beacon LightClientUpdate from Beacon API
-        //      (attested_header, finalized_header, finality_branch, sync_aggregate)
-        //   2. Build HeliosWitness struct
-        //   3. Call sp1_sdk::ProverClient::prove(HELIOS_ELF, witness)
-        //   4. Return Groth16 proof bytes
+    async fn generate_helios_sp1_proof(
+        &self,
+        witness: &HeliosWitness,
+        inputs: &HeliosPublicInputs,
+    ) -> Result<Vec<u8>> {
+        #[cfg(feature = "native")]
+        {
+            return generate_helios_sp1_proof_native(witness, inputs).await;
+        }
+        #[cfg(not(feature = "native"))]
         anyhow::bail!(
-            "Real SP1 Helios proof generation not yet implemented. Use --mock-proofs for testnet."
+            "Real SP1 Helios proof requires `--features native` and SP1_PRIVATE_KEY. \
+             Use --mock-proofs for testnet."
         )
     }
 
@@ -330,6 +392,72 @@ impl BridgeRelayer {
             "Real SP1 proof generation not yet implemented. Use --mock-proofs for testnet."
         )
     }
+}
+
+// ── SP1 Helios proof generation (native feature) ─────────────────────────────
+
+/// Generate a real SP1 Helios Groth16 proof using the Succinct Prover Network.
+///
+/// # Environment variables required
+/// - `SP1_PRIVATE_KEY` — your Succinct Prover Network private key
+///   (get from https://docs.succinct.xyz/prover-network/onboarding)
+///
+/// # ELF must be built first
+/// ```bash
+/// cd crates/provers/sp1/guest-helios
+/// cargo prove build
+/// # ELF will be at: target/elf-compilation/.../helios-step
+/// ```
+///
+/// # Proof mode
+/// Set `SP1_PROVER=network` (default) for cloud proving via Succinct Network.
+/// Set `SP1_PROVER=cpu` for local proving (slow, ~30 min on 8 cores).
+#[cfg(feature = "native")]
+async fn generate_helios_sp1_proof_native(
+    witness: &HeliosWitness,
+    _inputs: &crate::helios_types::HeliosPublicInputs,
+) -> Result<Vec<u8>> {
+    use sp1_sdk::{ProverClient, SP1Stdin};
+
+    // Load the compiled Helios guest ELF
+    const HELIOS_ELF_PATH: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../provers/sp1/guest-helios/elf/helios-step"
+    );
+    let elf = std::fs::read(HELIOS_ELF_PATH)
+        .with_context(|| {
+            format!(
+                "Helios ELF not found at {HELIOS_ELF_PATH}. \
+                 Build it first: cd crates/provers/sp1/guest-helios && cargo prove build"
+            )
+        })?;
+
+    // Initialize SP1 prover client.
+    // Reads SP1_PROVER env var: "network" (default), "cpu", or "mock".
+    let client = ProverClient::from_env();
+
+    // Derive proving key and verifying key from the ELF
+    let (pk, _vk) = client.setup(&elf);
+
+    // Serialize witness into SP1 stdin
+    let mut stdin = SP1Stdin::new();
+    stdin.write(witness);
+
+    // Generate Groth16 proof (suitable for on-chain verification)
+    tracing::info!("Helios: starting SP1 Groth16 proof generation (may take several minutes)...");
+    let proof = client
+        .prove(&pk, &stdin)
+        .groth16()
+        .run()
+        .context("Helios: SP1 prove failed")?;
+
+    tracing::info!("Helios: proof generated successfully");
+
+    // Serialize proof bytes (bincode) for storage and transmission
+    let proof_bytes =
+        bincode::serialize(&proof).context("Helios: serialize SP1 proof failed")?;
+
+    Ok(proof_bytes)
 }
 
 // ── Ethereum Client ───────────────────────────────────────────────────────────
