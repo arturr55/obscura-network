@@ -1,12 +1,12 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { useAccount, useWalletClient, useWriteContract, useReadContract } from "wagmi";
+import { useAccount, useWalletClient, useWriteContract, useReadContract, useChainId } from "wagmi";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import Link from "next/link";
 import { waitForTransactionReceipt } from "wagmi/actions";
 import { wagmiConfig } from "@/lib/wagmi";
-import { CONTRACTS, BILLING_ABI, ERC20_ABI, BRIDGE_ABI } from "@/lib/contracts";
+import { CONTRACTS, BILLING_ABI, ERC20_ABI, VAULT_ABI, CHAIN_CONFIG, isVaultDeployed } from "@/lib/contracts";
 import { saveNote, markNoteSpent, loadNotes } from "@/lib/notes";
 import { addHistoryEntry } from "@/lib/history";
 import {
@@ -163,6 +163,7 @@ export default function SendPage() {
   const { address, isConnected } = useAccount();
   const { data: walletClient } = useWalletClient();
   const { writeContractAsync } = useWriteContract();
+  const chainId = useChainId();
 
   // Wallet-derived viewing key (same on all devices with same wallet)
   const [viewingKey, setViewingKey] = useState<string | null>(null);
@@ -641,6 +642,18 @@ export default function SendPage() {
       return;
     }
 
+    const chainCfg = CHAIN_CONFIG[chainId];
+    if (!chainCfg) {
+      setStatus({ type: "error", msg: `Unsupported network (chainId ${chainId}). Switch to Ethereum, Arbitrum, or Base Sepolia.` });
+      return;
+    }
+    if (!isVaultDeployed(chainId)) {
+      setStatus({ type: "error", msg: `ObscuraVault not yet deployed on ${chainCfg.name}. Please switch to Ethereum Sepolia.` });
+      return;
+    }
+
+    const vaultAddress = chainCfg.vault;
+    const usdcAddress  = chainCfg.usdc;
     const amountUsdc = BigInt(Math.floor(Number(amount) * 1_000_000));
 
     setLoading(true);
@@ -649,8 +662,8 @@ export default function SendPage() {
       setStatus({ type: "info", msg: "Step 0/3 — Reading deposit ID..." });
       const { readContract } = await import("wagmi/actions");
       const nextId = await readContract(wagmiConfig, {
-        address: CONTRACTS.bridge,
-        abi: BRIDGE_ABI,
+        address: vaultAddress,
+        abi: VAULT_ABI,
         functionName: "nextDepositId",
       }) as bigint;
       const depositId = Number(nextId);
@@ -664,20 +677,20 @@ export default function SendPage() {
       // ── Step 1: Approve USDC spend ─────────────────────────────────────
       setStatus({ type: "info", msg: "Step 1/3 — Approving USDC spend..." });
       const approveTx = await writeContractAsync({
-        address: CONTRACTS.usdc,
+        address: usdcAddress,
         abi: ERC20_ABI,
         functionName: "approve",
-        args: [CONTRACTS.bridge, amountUsdc],
+        args: [vaultAddress, amountUsdc],
       });
       await waitForTransactionReceipt(wagmiConfig, { hash: approveTx });
 
-      // ── Step 2: Lock USDC — commitment is the obscura_recipient ────────
-      setStatus({ type: "info", msg: "Step 2/3 — Locking USDC in bridge (commitment as recipient)..." });
+      // ── Step 2: Lock USDC in vault (token, amount, obscuraRecipient) ───
+      setStatus({ type: "info", msg: "Step 2/3 — Locking USDC in vault..." });
       const depositTx = await writeContractAsync({
-        address: CONTRACTS.bridge,
-        abi: BRIDGE_ABI,
+        address: vaultAddress,
+        abi: VAULT_ABI,
         functionName: "deposit",
-        args: [amountUsdc, commitmentBytes32],
+        args: [usdcAddress, amountUsdc, commitmentBytes32],
       });
       await waitForTransactionReceipt(wagmiConfig, { hash: depositTx });
 
@@ -892,23 +905,56 @@ export default function SendPage() {
           <>
             <h2 className="text-white font-semibold mb-1">Bridge USDC → Obscura (Auto-Shield)</h2>
             <p className="text-gray-400 text-sm mb-4">
-              Lock USDC on Ethereum Sepolia. A ZK Note is pre-computed from your wallet address and automatically added to the shielded pool by the relayer — no separate Shield step needed.
+              Lock USDC on any supported chain. A ZK Note is pre-computed and automatically added to the shielded pool by the relayer — no separate Shield step needed.
             </p>
 
-            <div className="bg-green-900/20 border border-green-700/30 rounded-lg px-3 py-2 text-green-300 text-xs mb-4 flex items-start gap-2">
-              <span className="mt-0.5">✓</span>
-              <div>
-                <strong>Privacy by default:</strong> your Note commitment is computed client-side and passed directly to the bridge contract. The rollup auto-shields on claim — your funds go straight into the shielded pool.
-              </div>
+            {/* Chain selector */}
+            <label className="block text-gray-400 text-xs mb-1.5">Source chain</label>
+            <div className="flex gap-2 mb-4">
+              {[11155111, 421614, 84532].map((cid) => {
+                const cfg = CHAIN_CONFIG[cid];
+                const deployed = isVaultDeployed(cid);
+                const active = chainId === cid;
+                return (
+                  <div
+                    key={cid}
+                    className={`flex-1 text-center rounded-lg border px-2 py-2 text-xs transition-colors ${
+                      active
+                        ? "border-purple-500 bg-purple-900/20 text-white"
+                        : deployed
+                        ? "border-obscura-border text-gray-400 cursor-default"
+                        : "border-obscura-border text-gray-600 cursor-default opacity-50"
+                    }`}
+                  >
+                    <div className="font-medium">{cfg.shortName}</div>
+                    {!deployed && <div className="text-gray-600 text-[10px]">coming soon</div>}
+                    {deployed && active && <div className="text-purple-400 text-[10px]">connected</div>}
+                  </div>
+                );
+              })}
             </div>
 
-            <div className="bg-blue-900/20 border border-blue-700/30 rounded-lg px-3 py-2 text-blue-300 text-xs mb-4 flex items-start gap-2">
-              <span className="mt-0.5">ℹ</span>
-              <div>
-                USDC on Sepolia: <span className="font-mono text-white">{CONTRACTS.usdc.slice(0, 10)}...</span><br/>
-                Bridge contract: <span className="font-mono text-white">{CONTRACTS.bridge.slice(0, 10)}...</span>
+            {/* Chain info */}
+            {CHAIN_CONFIG[chainId] ? (
+              isVaultDeployed(chainId) ? (
+                <div className="bg-blue-900/20 border border-blue-700/30 rounded-lg px-3 py-2 text-blue-300 text-xs mb-4 flex items-start gap-2">
+                  <span className="mt-0.5">ℹ</span>
+                  <div>
+                    USDC: <span className="font-mono text-white">{CHAIN_CONFIG[chainId].usdc.slice(0, 10)}...</span><br/>
+                    Vault: <span className="font-mono text-white">{CHAIN_CONFIG[chainId].vault.slice(0, 10)}...</span>
+                    {" "}<a href={`${CHAIN_CONFIG[chainId].explorerUrl}/address/${CHAIN_CONFIG[chainId].vault}`} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 underline">view</a>
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-yellow-900/20 border border-yellow-700/30 rounded-lg px-3 py-2 text-yellow-300 text-xs mb-4">
+                  ⚠ ObscuraVault is not yet deployed on {CHAIN_CONFIG[chainId].name}. Switch to <strong>Ethereum Sepolia</strong> in your wallet to bridge.
+                </div>
+              )
+            ) : (
+              <div className="bg-red-900/20 border border-red-700/30 rounded-lg px-3 py-2 text-red-300 text-xs mb-4">
+                ⚠ Unsupported network (chainId {chainId}). Please switch to Ethereum, Arbitrum, or Base Sepolia.
               </div>
-            </div>
+            )}
 
             <label className="block text-gray-400 text-xs mb-1.5">USDC amount (e.g. 10 = 10 USDC)</label>
             <input

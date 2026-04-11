@@ -30,7 +30,7 @@ export default function StartPage() {
       {/* Primary action — Bridge */}
       <div className="w-full max-w-3xl mb-4">
         <Link
-          href="/send"
+          href="/bridge"
           className="group flex flex-col sm:flex-row items-center gap-6 bg-obscura-card border border-purple-700/50 hover:border-purple-500 rounded-2xl p-7 transition-all duration-200 hover:-translate-y-0.5"
         >
           <div className="w-16 h-16 rounded-2xl bg-purple-900/50 flex items-center justify-center text-3xl shrink-0">
@@ -40,14 +40,14 @@ export default function StartPage() {
             <div className="text-purple-400 text-xs font-bold tracking-widest mb-1">MAIN FEATURE</div>
             <div className="text-white font-bold text-xl mb-1">Bridge privately between chains</div>
             <div className="text-gray-400 text-sm">
-              Send from Ethereum → receive on Arbitrum, Base, Polygon from a fresh address.
+              Send from Ethereum → receive on Arbitrum, Base, Optimism from a fresh address.
               The link is invisible on-chain. ZK compliance proof included.
             </div>
             <div className="flex flex-wrap gap-2 mt-3 justify-center sm:justify-start">
-              {["Ethereum", "Arbitrum", "Base", "Polygon"].map(n => (
+              {["Ethereum", "Arbitrum", "Base", "Optimism", "Polygon", "BSC"].map(n => (
                 <span key={n} className="bg-purple-900/30 border border-purple-700/30 text-purple-300 text-xs px-2 py-0.5 rounded-full">{n}</span>
               ))}
-              <span className="text-gray-600 text-xs px-2 py-0.5">+ more soon</span>
+              <span className="text-gray-600 text-xs px-2 py-0.5">+ more</span>
             </div>
           </div>
           <div className="bg-purple-600 group-hover:bg-purple-500 text-white font-semibold px-6 py-3 rounded-xl transition-colors shrink-0">
