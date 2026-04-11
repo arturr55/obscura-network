@@ -41,6 +41,10 @@ pub mod encryption;
 #[cfg(feature = "sp1")]
 pub mod sp1_prover;
 
+/// Combined Transfer+Sanctions proof (aggregated, cheaper on-chain verification).
+/// Use prove_transfer_with_sanctions() to generate a single Groth16 proof covering both.
+pub mod combined_prover;
+
 use types::{AssetId, Commitment, Note, Nullifier};
 
 /// Maximum age of a sanctions proof in seconds (24 hours).

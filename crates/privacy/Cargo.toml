@@ -23,8 +23,10 @@ sp1-sdk = { version = "6.0.2", optional = true, features = ["blocking"] }
 sp1-prover = { version = "6.0.2", optional = true }
 sp1-verifier = { version = "6.0.2", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"], optional = true }
+# Used in combined_prover.rs for serializing SP1 proofs (only needed with sp1 feature)
+bincode = { version = "1", optional = true }
 
 [features]
 native = ["sov-modules-api/native"]
 # Enable real SP1/Groth16 proofs (Phase 2)
-sp1 = ["sp1-sdk", "sp1-verifier", "sp1-prover", "tokio"]
+sp1 = ["sp1-sdk", "sp1-verifier", "sp1-prover", "tokio", "bincode"]
