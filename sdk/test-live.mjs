@@ -7,7 +7,7 @@ import { ObscuraClient, PrivateKeySigner } from "./dist/index.js";
 
 const NODE_URL = "http://127.0.0.1:12346";
 // Test private key (не использовать в продакшне)
-const TEST_PRIVATE_KEY = "0x39ffa6690b679b0af4efe7e9e7e67dcdae578a9de0891d31e2debc525299ead6";
+const TEST_PRIVATE_KEY = process.env.PRIVATE_KEY || "0xYOUR_PRIVATE_KEY_HERE";
 
 async function main() {
   console.log("=== Obscura SDK Live Test ===\n");

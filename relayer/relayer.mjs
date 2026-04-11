@@ -59,8 +59,7 @@ const CONFIG = {
   obscuraRpcUrl:
     process.env.OBSCURA_RPC_URL || "http://localhost:12346",
   privateKey:
-    process.env.PRIVATE_KEY ||
-    "0x39ffa6690b679b0af4efe7e9e7e67dcdae578a9de0891d31e2debc525299ead6",
+    process.env.PRIVATE_KEY,
   bridgeContract:
     process.env.BRIDGE_CONTRACT ||
     "0xE629E85f61a4F0E6cee1F18B06332f8ABCD0EDeD",
@@ -69,11 +68,9 @@ const CONFIG = {
   // In production: signer2/3 keys live on separate machines.
   // On testnet: all 3 keys on the same server (still tests the contract logic).
   signerKey2:
-    process.env.SIGNER_KEY2 ||
-    "0x01fafcbe9441f283d811d79dc5ac9813a4b548c03af05a438c354df716312af8",
+    process.env.SIGNER_KEY2,
   signerKey3:
-    process.env.SIGNER_KEY3 ||
-    "0x955a8da3df6d00bb4b0c4376cc5057201e7c4727c27cf114fc3bf10a3c9a4c8d",
+    process.env.SIGNER_KEY3,
   pollIntervalMs: 30_000,   // check Ethereum every 30 seconds
   stateFile: "./relayer-state.json",
 };

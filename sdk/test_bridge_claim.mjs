@@ -2,7 +2,7 @@ import { createStandardRollup } from "@sovereign-sdk/web3";
 import { PrivateKeySigner } from "./dist/index.js";
 
 const NODE_URL = "http://49.13.23.128:12346";
-const PRIVATE_KEY = "0x39ffa6690b679b0af4efe7e9e7e67dcdae578a9de0891d31e2debc525299ead6";
+const PRIVATE_KEY = process.env.PRIVATE_KEY || "0xYOUR_PRIVATE_KEY_HERE";
 
 const mockProof = [
   0x4f, 0x42, 0x53, 0x62, 0x72, 0x69, 0x64, 0x67, 0x65,

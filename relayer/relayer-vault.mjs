@@ -24,7 +24,8 @@ import { privateKeyToAccount } from "viem/accounts";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { randomBytes } from "crypto";
 
-const PRIVATE_KEY = process.env.DEPLOY_PRIVATE_KEY || "0x39ffa6690b679b0af4efe7e9e7e67dcdae578a9de0891d31e2debc525299ead6";
+const PRIVATE_KEY = process.env.DEPLOY_PRIVATE_KEY;
+if (!PRIVATE_KEY) throw new Error("DEPLOY_PRIVATE_KEY env var is required");
 const STATE_FILE  = "/root/relayer/vault-relayer-state.json";
 
 const VAULT_ABI = parseAbi([
