@@ -16,6 +16,7 @@ export function Header() {
         <nav className="hidden md:flex items-center gap-6 text-sm text-gray-400">
           <Link href="/#plans" className="hover:text-white transition-colors">Plans</Link>
           <Link href="/dashboard" className="hover:text-white transition-colors">Dashboard</Link>
+          <Link href="/bridge" className="hover:text-white transition-colors text-blue-400 hover:text-blue-300">Bridge</Link>
           <Link href="/send" className="hover:text-white transition-colors text-purple-400 hover:text-purple-300">Send TX</Link>
           <Link href="/notes" className="hover:text-white transition-colors">Notes</Link>
           <Link href="/history" className="hover:text-white transition-colors">History</Link>
