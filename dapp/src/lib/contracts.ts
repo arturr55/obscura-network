@@ -9,7 +9,7 @@ export const CONTRACTS = {
   usdc:    "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238" as Address,
 };
 
-// ── Multi-chain bridge config ─────────────────────────────────────────────────
+// ── Multi-chain bridge config (ObscuraVault v1) ───────────────────────────────
 //
 // ObscuraVault is deployed on each source chain.
 // Users deposit tokens here → get bridged tokens on Obscura rollup.
