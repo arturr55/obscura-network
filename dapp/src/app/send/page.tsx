@@ -6,7 +6,7 @@ import { ConnectButton } from "@rainbow-me/rainbowkit";
 import Link from "next/link";
 import { waitForTransactionReceipt } from "wagmi/actions";
 import { wagmiConfig } from "@/lib/wagmi";
-import { CONTRACTS, BILLING_ABI, ERC20_ABI, VAULT_ABI, CHAIN_CONFIG, isVaultDeployed } from "@/lib/contracts";
+import { CONTRACTS, BILLING_ABI, ERC20_ABI } from "@/lib/contracts";
 import { saveNote, markNoteSpent, loadNotes } from "@/lib/notes";
 import { addHistoryEntry } from "@/lib/history";
 import {
@@ -25,7 +25,7 @@ const MOCK_PROOF_HEX = "4f425376" + "0".repeat(56); // OBSv + padding
 
 const ORACLE_PROXY = "/api/sanctions";
 
-type TxType = "shield" | "transfer" | "unshield" | "bridge" | "withdraw";
+type TxType = "shield" | "transfer" | "unshield";
 
 type SanctionsStatus = "idle" | "checking" | "clean" | "sanctioned" | "error";
 
@@ -69,55 +69,6 @@ function StatusMsg({ type, msg }: { type: "success" | "error" | "info"; msg: str
   return <div className={`border rounded-lg px-4 py-3 text-sm mt-4 ${colors[type]}`}>{msg}</div>;
 }
 
-// Must match Rust: AssetId(*b"bridged-usdc-obscura-network-v01")
-const BRIDGED_USDC_ASSET_ID = "627269646765642d757364632d6f6273637572612d6e6574776f726b2d763031";
-
-/** Reconstruct bridge shield Note deterministically (mirrors relayer bridgeShieldSalt) */
-async function reconstructBridgeNote(
-  depositId: number,
-  obscuraRecipient: string, // 0x address
-  amountUsdc: bigint         // raw USDC micro-units (6 dec)
-): Promise<{ commitment: string; nullifier: string; amount: string; asset_id: string }> {
-  const enc = new TextEncoder();
-  const prefix = enc.encode("obscura_bridge_shield_v1");
-  const idBuf = new Uint8Array(8);
-  new DataView(idBuf.buffer).setBigUint64(0, BigInt(depositId), true); // LE
-  const recipientHex = obscuraRecipient.replace("0x", "").padStart(64, "0");
-  const recipientBuf = Uint8Array.from(
-    recipientHex.match(/.{2}/g)!.map((b) => parseInt(b, 16))
-  );
-  const combined = new Uint8Array(prefix.length + 8 + 32);
-  combined.set(prefix);
-  combined.set(idBuf, prefix.length);
-  combined.set(recipientBuf, prefix.length + 8);
-
-  // keccak256 via viem
-  const { keccak256 } = await import("viem");
-  const salt = keccak256(combined);
-
-  // Deterministic commitment = keccak256(amount || asset_id || owner || salt)
-  const commitment = keccak256(
-    Uint8Array.from([
-      ...new Uint8Array(new BigUint64Array([amountUsdc]).buffer),
-      ...Uint8Array.from(BRIDGED_USDC_ASSET_ID.match(/.{2}/g)!.map((b) => parseInt(b, 16))),
-      ...recipientBuf,
-      ...Uint8Array.from(salt.replace("0x", "").match(/.{2}/g)!.map((b) => parseInt(b, 16))),
-    ])
-  );
-  const nullifier = keccak256(
-    Uint8Array.from([
-      ...Uint8Array.from(commitment.replace("0x", "").match(/.{2}/g)!.map((b) => parseInt(b, 16))),
-      ...recipientBuf,
-    ])
-  );
-
-  return {
-    commitment,
-    nullifier,
-    amount: amountUsdc.toString(),
-    asset_id: BRIDGED_USDC_ASSET_ID,
-  };
-}
 
 function randomHex(n: number) {
   return Array.from({ length: n }, () =>
@@ -192,7 +143,7 @@ export default function SendPage() {
     }
   }
 
-  const [txType, setTxType] = useState<TxType>("bridge");
+  const [txType, setTxType] = useState<TxType>("shield");
   const [amount, setAmount] = useState("");
   const [recipient, setRecipient] = useState("");
   const [inputNote, setInputNote] = useState("");
@@ -203,13 +154,7 @@ export default function SendPage() {
     status: "idle", sanctionsRoot: null, proofTimestamp: 0,
   });
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [bridgeRecipient, setBridgeRecipient] = useState("");
-  const [withdrawDepositId, setWithdrawDepositId] = useState("");
-  const [withdrawRecipient, setWithdrawRecipient] = useState("");
   const [shareLink, setShareLink] = useState<string | null>(null);
-  const [claimDepositId, setClaimDepositId] = useState("");
-  const [claimAmountUsdc, setClaimAmountUsdc] = useState("");
-  const [claimLoading, setClaimLoading] = useState(false);
 
   // Auto-check recipient address against OFAC oracle (debounced 600ms)
   useEffect(() => {
@@ -249,14 +194,6 @@ export default function SendPage() {
       }
     }, 600);
   }, [recipient, txType]);
-
-  // Auto-fill recipients from connected wallet
-  useEffect(() => {
-    if (address) {
-      if (!bridgeRecipient) setBridgeRecipient(address);
-      if (!withdrawRecipient) setWithdrawRecipient(address);
-    }
-  }, [address]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Pre-fill note from Notes page ("Use in Transfer/Unshield" button)
   useEffect(() => {
@@ -563,164 +500,6 @@ export default function SendPage() {
     }
   }
 
-  async function handleClaimBridgeNote() {
-    const depositId = parseInt(claimDepositId);
-    const amountUsdc = parseFloat(claimAmountUsdc);
-    if (isNaN(depositId) || isNaN(amountUsdc) || amountUsdc <= 0) {
-      setStatus({ type: "error", msg: "Enter a valid Deposit ID and USDC amount" });
-      return;
-    }
-    if (!address) {
-      setStatus({ type: "error", msg: "Connect wallet first" });
-      return;
-    }
-    setClaimLoading(true);
-    try {
-      const amountRaw = BigInt(Math.round(amountUsdc * 1_000_000));
-      const note = await reconstructBridgeNote(depositId, address, amountRaw);
-      saveNote({ type: "shield", ...note, label: `Bridge deposit #${depositId}` });
-      addHistoryEntry({
-        type: "bridge", status: "success",
-        amountUsdc: amountRaw.toString(),
-        depositId,
-        note: "Shield note claimed",
-      });
-      setStatus({ type: "success", msg: `✓ Note saved! ${amountUsdc} bridged USDC ready to use in Transfer or Unshield.` });
-    } catch (e: unknown) {
-      setStatus({ type: "error", msg: `Error: ${e instanceof Error ? e.message : String(e)}` });
-    } finally {
-      setClaimLoading(false);
-    }
-  }
-
-  async function handleWithdraw() {
-    const depositId = parseInt(withdrawDepositId);
-    if (isNaN(depositId) || depositId < 0) {
-      setStatus({ type: "error", msg: "Enter a valid deposit ID (number from the original Bridge TX)" });
-      return;
-    }
-    if (!withdrawRecipient.match(/^0x[0-9a-fA-F]{40}$/)) {
-      setStatus({ type: "error", msg: "Enter a valid Ethereum recipient address" });
-      return;
-    }
-
-    setLoading(true);
-    setStatus({ type: "info", msg: "Submitting withdrawal to relayer..." });
-    try {
-      const res = await fetch("/api/withdraw", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ deposit_id: depositId, eth_recipient: withdrawRecipient }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Relayer error");
-      addHistoryEntry({
-        type: "withdraw", status: "success",
-        depositId,
-        ethTxHash: data.ethTxHash,
-        recipient: withdrawRecipient,
-      });
-
-      setStatus({
-        type: "success",
-        msg: `✓ Withdrawal submitted! ETH TX: ${String(data.ethTxHash).slice(0, 18)}... — USDC will arrive in your wallet after confirmation.`,
-      });
-    } catch (e: unknown) {
-      setStatus({ type: "error", msg: `Error: ${e instanceof Error ? e.message : String(e)}` });
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleBridge() {
-    if (!amount || Number(amount) <= 0) {
-      setStatus({ type: "error", msg: "Enter a valid USDC amount" });
-      return;
-    }
-    if (!address) {
-      setStatus({ type: "error", msg: "Connect your wallet first" });
-      return;
-    }
-
-    const chainCfg = CHAIN_CONFIG[chainId];
-    if (!chainCfg) {
-      setStatus({ type: "error", msg: `Unsupported network (chainId ${chainId}). Switch to Ethereum, Arbitrum, or Base Sepolia.` });
-      return;
-    }
-    if (!isVaultDeployed(chainId)) {
-      setStatus({ type: "error", msg: `ObscuraVault not yet deployed on ${chainCfg.name}. Please switch to Ethereum Sepolia.` });
-      return;
-    }
-
-    const vaultAddress = chainCfg.vault;
-    const usdcAddress  = chainCfg.usdc;
-    const amountUsdc = BigInt(Math.floor(Number(amount) * 1_000_000));
-
-    setLoading(true);
-    try {
-      // ── Step 0: Read next deposit ID to pre-compute commitment ─────────
-      setStatus({ type: "info", msg: "Step 0/3 — Reading deposit ID..." });
-      const { readContract } = await import("wagmi/actions");
-      const nextId = await readContract(wagmiConfig, {
-        address: vaultAddress,
-        abi: VAULT_ABI,
-        functionName: "nextDepositId",
-      }) as bigint;
-      const depositId = Number(nextId);
-
-      // Pre-compute Note + commitment that the rollup will auto-shield
-      const noteData = await reconstructBridgeNote(depositId, address, amountUsdc);
-      // commitment is 0x-prefixed 32-byte hex → strip prefix for bytes32
-      const commitmentBytes = noteData.commitment.replace(/^0x/, "");
-      const commitmentBytes32 = `0x${commitmentBytes.padStart(64, "0")}` as `0x${string}`;
-
-      // ── Step 1: Approve USDC spend ─────────────────────────────────────
-      setStatus({ type: "info", msg: "Step 1/3 — Approving USDC spend..." });
-      const approveTx = await writeContractAsync({
-        address: usdcAddress,
-        abi: ERC20_ABI,
-        functionName: "approve",
-        args: [vaultAddress, amountUsdc],
-      });
-      await waitForTransactionReceipt(wagmiConfig, { hash: approveTx });
-
-      // ── Step 2: Lock USDC in vault (token, amount, obscuraRecipient) ───
-      setStatus({ type: "info", msg: "Step 2/3 — Locking USDC in vault..." });
-      const depositTx = await writeContractAsync({
-        address: vaultAddress,
-        abi: VAULT_ABI,
-        functionName: "deposit",
-        args: [usdcAddress, amountUsdc, commitmentBytes32],
-      });
-      await waitForTransactionReceipt(wagmiConfig, { hash: depositTx });
-
-      // ── Step 3: Auto-save Note ─────────────────────────────────────────
-      saveNote({
-        type: "shield",
-        commitment: noteData.commitment,
-        nullifier: noteData.nullifier,
-        amount: noteData.amount,
-        asset_id: noteData.asset_id,
-        label: `Bridge deposit #${depositId} (${amount} USDC)`,
-      });
-      addHistoryEntry({
-        type: "bridge", status: "success",
-        amount: String(amountUsdc),
-        ethTxHash: depositTx,
-        note: `Deposit #${depositId} — commitment pre-shielded`,
-      });
-
-      setStatus({
-        type: "success",
-        msg: `✓ Bridged ${amount} USDC as deposit #${depositId}! Note saved. Relayer will add it to the shielded pool in ~1 min — then use it in Transfer/Unshield.`,
-      });
-    } catch (e: unknown) {
-      setStatus({ type: "error", msg: `Error: ${e instanceof Error ? e.message : String(e)}` });
-    } finally {
-      setLoading(false);
-    }
-  }
-
   if (!isConnected) {
     return (
       <main className="max-w-2xl mx-auto px-4 py-24 text-center">
@@ -792,17 +571,17 @@ export default function SendPage() {
 
       {/* TX Type */}
       <div className="flex gap-2 mb-6 flex-wrap">
-        {(["shield", "transfer", "unshield", "bridge", "withdraw"] as TxType[]).map((t) => (
+        {(["shield", "transfer", "unshield"] as TxType[]).map((t) => (
           <button
             key={t}
             onClick={() => { setTxType(t); setStatus(null); setSavedNote(null); setShareLink(null); setSanctions({ status: "idle", sanctionsRoot: null, proofTimestamp: 0 }); }}
             className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
               txType === t
-                ? t === "withdraw" ? "bg-orange-600 text-white" : "bg-purple-600 text-white"
+                ? "bg-purple-600 text-white"
                 : "border border-obscura-border text-gray-400 hover:text-white hover:border-purple-600"
             }`}
           >
-            {t === "shield" ? "🔒 Shield" : t === "transfer" ? "🔄 Transfer" : t === "unshield" ? "🔓 Unshield" : t === "bridge" ? "🌉 Bridge USDC" : "↩ Withdraw to ETH"}
+            {t === "shield" ? "🔒 Shield" : t === "transfer" ? "🔄 Transfer" : "🔓 Unshield"}
           </button>
         ))}
       </div>
@@ -901,164 +680,7 @@ export default function SendPage() {
               {loading ? "Processing..." : "Unshield Tokens"}
             </button>
           </>
-        ) : txType === "bridge" ? (
-          <>
-            <h2 className="text-white font-semibold mb-1">Bridge USDC → Obscura (Auto-Shield)</h2>
-            <p className="text-gray-400 text-sm mb-4">
-              Lock USDC on any supported chain. A ZK Note is pre-computed and automatically added to the shielded pool by the relayer — no separate Shield step needed.
-            </p>
-
-            {/* Chain selector */}
-            <label className="block text-gray-400 text-xs mb-1.5">Source chain</label>
-            <div className="flex gap-2 mb-4">
-              {[11155111, 421614, 84532].map((cid) => {
-                const cfg = CHAIN_CONFIG[cid];
-                const deployed = isVaultDeployed(cid);
-                const active = chainId === cid;
-                return (
-                  <div
-                    key={cid}
-                    className={`flex-1 text-center rounded-lg border px-2 py-2 text-xs transition-colors ${
-                      active
-                        ? "border-purple-500 bg-purple-900/20 text-white"
-                        : deployed
-                        ? "border-obscura-border text-gray-400 cursor-default"
-                        : "border-obscura-border text-gray-600 cursor-default opacity-50"
-                    }`}
-                  >
-                    <div className="font-medium">{cfg.shortName}</div>
-                    {!deployed && <div className="text-gray-600 text-[10px]">coming soon</div>}
-                    {deployed && active && <div className="text-purple-400 text-[10px]">connected</div>}
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Chain info */}
-            {CHAIN_CONFIG[chainId] ? (
-              isVaultDeployed(chainId) ? (
-                <div className="bg-blue-900/20 border border-blue-700/30 rounded-lg px-3 py-2 text-blue-300 text-xs mb-4 flex items-start gap-2">
-                  <span className="mt-0.5">ℹ</span>
-                  <div>
-                    USDC: <span className="font-mono text-white">{CHAIN_CONFIG[chainId].usdc.slice(0, 10)}...</span><br/>
-                    Vault: <span className="font-mono text-white">{CHAIN_CONFIG[chainId].vault.slice(0, 10)}...</span>
-                    {" "}<a href={`${CHAIN_CONFIG[chainId].explorerUrl}/address/${CHAIN_CONFIG[chainId].vault}`} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 underline">view</a>
-                  </div>
-                </div>
-              ) : (
-                <div className="bg-yellow-900/20 border border-yellow-700/30 rounded-lg px-3 py-2 text-yellow-300 text-xs mb-4">
-                  ⚠ ObscuraVault is not yet deployed on {CHAIN_CONFIG[chainId].name}. Switch to <strong>Ethereum Sepolia</strong> in your wallet to bridge.
-                </div>
-              )
-            ) : (
-              <div className="bg-red-900/20 border border-red-700/30 rounded-lg px-3 py-2 text-red-300 text-xs mb-4">
-                ⚠ Unsupported network (chainId {chainId}). Please switch to Ethereum, Arbitrum, or Base Sepolia.
-              </div>
-            )}
-
-            <label className="block text-gray-400 text-xs mb-1.5">USDC amount (e.g. 10 = 10 USDC)</label>
-            <input
-              type="number"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              placeholder="e.g. 10"
-              className="w-full bg-obscura-dark border border-obscura-border rounded-lg px-4 py-3 text-white placeholder-gray-600 text-sm mb-4 focus:outline-none focus:border-purple-600"
-            />
-
-            <button
-              onClick={handleBridge}
-              disabled={loading}
-              className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white py-3 rounded-xl font-semibold transition-colors"
-            >
-              {loading ? "Processing..." : "Approve & Bridge →"}
-            </button>
-
-            <p className="text-gray-600 text-xs mt-3 text-center">
-              Your shielded Note is saved automatically. Find it in{" "}
-              <Link href="/notes" className="text-purple-400 hover:text-purple-300">My Notes</Link>{" "}
-              after the relayer confirms (~1 min).
-            </p>
-
-            {/* Fallback: Claim Note for older deposits */}
-            <div className="mt-6 pt-5 border-t border-obscura-border">
-              <h3 className="text-gray-500 font-medium text-sm mb-1">Recover Note for older deposit</h3>
-              <p className="text-gray-600 text-xs mb-3">
-                If you bridged before the auto-shield upgrade, enter the deposit ID and amount to reconstruct your Note.
-              </p>
-              <div className="flex gap-2 mb-2">
-                <div className="flex-1">
-                  <label className="block text-gray-500 text-xs mb-1">Deposit ID</label>
-                  <input
-                    type="number" min="0"
-                    value={claimDepositId}
-                    onChange={(e) => setClaimDepositId(e.target.value)}
-                    placeholder="e.g. 1"
-                    className="w-full bg-obscura-dark border border-obscura-border rounded-lg px-3 py-2 text-white placeholder-gray-600 text-sm focus:outline-none focus:border-purple-600"
-                  />
-                </div>
-                <div className="flex-1">
-                  <label className="block text-gray-500 text-xs mb-1">Amount (USDC)</label>
-                  <input
-                    type="number" min="0" step="0.01"
-                    value={claimAmountUsdc}
-                    onChange={(e) => setClaimAmountUsdc(e.target.value)}
-                    placeholder="e.g. 10"
-                    className="w-full bg-obscura-dark border border-obscura-border rounded-lg px-3 py-2 text-white placeholder-gray-600 text-sm focus:outline-none focus:border-purple-600"
-                  />
-                </div>
-              </div>
-              <button
-                onClick={handleClaimBridgeNote}
-                disabled={claimLoading}
-                className="w-full border border-obscura-border text-gray-500 hover:border-purple-600 hover:text-purple-300 disabled:opacity-50 py-2 rounded-xl text-sm font-medium transition-colors"
-              >
-                {claimLoading ? "Reconstructing..." : "Recover Note →"}
-              </button>
-            </div>
-          </>
-        ) : (
-          <>
-            <h2 className="text-white font-semibold mb-1">Withdraw USDC → Ethereum</h2>
-            <p className="text-gray-400 text-sm mb-4">
-              Unlock your original USDC deposit back to an Ethereum address. The relayer will call the bridge contract and release your USDC.
-            </p>
-
-            <div className="bg-orange-900/20 border border-orange-700/30 rounded-lg px-3 py-2 text-orange-300 text-xs mb-4 flex items-start gap-2">
-              <span className="mt-0.5">ℹ</span>
-              <div>
-                You need the <strong>Deposit ID</strong> from your original Bridge TX.
-                Each deposit can only be withdrawn once.
-              </div>
-            </div>
-
-            <label className="block text-gray-400 text-xs mb-1.5">Deposit ID (from Bridge TX)</label>
-            <input
-              type="number"
-              min="0"
-              value={withdrawDepositId}
-              onChange={(e) => setWithdrawDepositId(e.target.value)}
-              placeholder="e.g. 1"
-              className="w-full bg-obscura-dark border border-obscura-border rounded-lg px-4 py-3 text-white placeholder-gray-600 text-sm mb-4 focus:outline-none focus:border-orange-500"
-            />
-
-            <label className="block text-gray-400 text-xs mb-1.5">Ethereum recipient address</label>
-            <input
-              type="text"
-              value={withdrawRecipient}
-              onChange={(e) => setWithdrawRecipient(e.target.value)}
-              placeholder="0x..."
-              className="w-full bg-obscura-dark border border-obscura-border rounded-lg px-4 py-3 text-white placeholder-gray-600 text-sm mb-4 focus:outline-none focus:border-orange-500"
-            />
-
-            <button
-              onClick={handleWithdraw}
-              disabled={loading}
-              className="w-full bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white py-3 rounded-xl font-semibold transition-colors"
-            >
-              {loading ? "Processing..." : "Withdraw to Ethereum"}
-            </button>
-          </>
-        )}
+        ) : null}
 
         {shareLink && (
           <div className="mt-4 border border-green-700/40 bg-green-900/20 rounded-xl p-4">
